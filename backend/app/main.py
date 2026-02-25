@@ -13,17 +13,37 @@ app = FastAPI(title="Avia Performance Backend")
 # --- ЭНДПОИНТЫ АВТОРИЗАЦИИ ---
 
 @app.post("/auth/register")
-def register(user_data: dict, db: Session = Depends(database.get_db)):
-    hashed_pwd = security.get_password_hash(user_data['password'])
-    new_user = models.User(
-        email=user_data['email'],
-        password_hash=hashed_pwd,
-        first_name=user_data['first_name'],
-        last_name=user_data['last_name']
-    )
-    db.add(new_user)
-    db.commit()
-    return {"message": "User created"}
+async def register(user_data: dict, db: Session = Depends(database.get_db)):
+    try:
+        # Проверка наличия полей (чтобы не было KeyError)
+        if 'email' not in user_data or 'password' not in user_data:
+            raise HTTPException(status_code=400, detail="Email and password are required")
+
+        # Проверка на дубликат
+        if db.query(models.User).filter(models.User.email == user_data['email']).first():
+            raise HTTPException(status_code=400, detail="User already exists")
+
+        hashed_pwd = security.get_password_hash(user_data['password'])
+        
+        # Получаем ID роли из базы
+        role_record = db.execute("SELECT role_id FROM roles WHERE role_name = 'crew_member' LIMIT 1").fetchone()
+        current_role_id = role_record[0] if role_record else None
+
+        new_user = models.User(
+            email=user_data['email'],
+            password_hash=hashed_pwd,
+            first_name=user_data.get('first_name'),
+            last_name=user_data.get('last_name'),
+            role_id=current_role_id # Используем правильное имя колонки
+        )
+        
+        db.add(new_user)
+        db.commit()
+        return {"status": "success", "message": "User created successfully"}
+    except Exception as e:
+        db.rollback()
+        print(f"ERROR: {str(e)}") # Это увидим в docker logs
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.post("/auth/login")
 def login(form_data: dict, db: Session = Depends(database.get_db)):

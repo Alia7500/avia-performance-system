@@ -10,7 +10,8 @@ class User(Base):
     password_hash = Column(String)
     first_name = Column(String)
     last_name = Column(String)
-    role = Column(String, default="crew_member")
+    # МЕНЯЕМ role на role_id, как в твоей базе Neon
+    role_id = Column(UUID(as_uuid=True), nullable=True) 
 
 class Flight(Base):
     __tablename__ = "flights"
