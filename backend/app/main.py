@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import uuid
 
-# Импортируем наши модули
-from . import models, database
-from .ai.analytics import analyze_crew_health
+# ИСПОЛЬЗУЕМ АБСОЛЮТНЫЕ ИМПОРТЫ ДЛЯ ЛОКАЛЬНОГО ЗАПУСКА
+from app import models, database
+from app.ai.analytics import analyze_crew_health
 
 # Инициализируем таблицы в БД Neon
 models.Base.metadata.create_all(bind=database.engine)
