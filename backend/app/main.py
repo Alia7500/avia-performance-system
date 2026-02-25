@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app import models, database, core
 from app.core import security
@@ -26,7 +27,8 @@ async def register(user_data: dict, db: Session = Depends(database.get_db)):
         hashed_pwd = security.get_password_hash(user_data['password'])
         
         # Получаем ID роли из базы
-        role_record = db.execute("SELECT role_id FROM roles WHERE role_name = 'crew_member' LIMIT 1").fetchone()
+        # Мы добавили слово text(...) вокруг запроса
+        role_record = db.execute(text("SELECT role_id FROM roles WHERE role_name = 'crew_member' LIMIT 1")).fetchone()
         current_role_id = role_record[0] if role_record else None
 
         new_user = models.User(
