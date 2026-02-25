@@ -4,53 +4,57 @@ from datetime import datetime
 
 def analyze_crew_health(file_content: bytes, file_name: str = "data.csv"):
     try:
-        # 1. Читаем файл, пробуем разные кодировки
-        try:
-            text = file_content.decode('utf-8')
-        except:
-            text = file_content.decode('cp1251', errors='ignore')
-            
-        lines = text.splitlines()
+        # 1. Декодируем файл
+        raw_text = file_content.decode('utf-8', errors='ignore')
+        lines = raw_text.splitlines()
         
-        # 2. Ищем строку, где реально начинаются данные
-        header_idx = 0
-        for i, line in enumerate(lines[:20]):
-            if line.count(',') > 5 or line.count(';') > 5:
+        # 2. Ищем, где реально начинаются данные (пропускаем технический мусор)
+        header_idx = -1
+        for i, line in enumerate(lines[:15]):
+            if 'heart_rate' in line.lower() and ',' in line:
                 header_idx = i
                 break
         
-        # 3. Читаем таблицу с авто-определением разделителя (запятая или точка с запятой)
-        df = pd.read_csv(io.StringIO('\n'.join(lines[header_idx:])), sep=None, engine='python', on_bad_lines='skip')
-
-        # 4. ИЩЕМ ПУЛЬС ЛЮБЫМ СПОСОБОМ
-        target_col = None
+        if header_idx == -1:
+            return {"error": "Не удалось найти структуру таблицы. Проверьте, что это файл пульса."}
         
-        # Сначала ищем по названию
+        # 3. Читаем CSV с супер-защитой
+        # usecols позволяет нам взять только те колонки, которые реально есть в заголовке, 
+        # игнорируя лишние запятые в конце строк
+        data_str = '\n'.join(lines[header_idx:])
+        
+        # Сначала читаем только заголовки, чтобы понять сколько реально колонок
+        headers = lines[header_idx].split(',')
+        
+        df = pd.read_csv(
+            io.StringIO(data_str), 
+            sep=',', 
+            on_bad_lines='skip', # Пропускать строки, если в них совсем всё плохо
+            engine='python',
+            usecols=range(len(headers)) # Читать только столько колонок, сколько в заголовке
+        )
+
+        # 4. Ищем колонку с пульсом
+        target_col = None
         for col in df.columns:
-            if 'heart_rate' in col.lower() and 'count' not in col.lower():
+            if 'heart_rate.heart_rate' in col.lower() or (col.lower() == 'heart_rate'):
                 target_col = col
                 break
         
-        # Если по названию не нашли, ищем колонку, где среднее значение похоже на пульс (60-100)
-        if target_col is None:
-            for col in df.columns:
-                numeric_col = pd.to_numeric(df[col], errors='coerce').dropna()
-                if not numeric_col.empty and 40 < numeric_col.mean() < 120:
-                    target_col = col
-                    break
+        if not target_col:
+            potential = [c for c in df.columns if 'heart_rate' in c.lower()]
+            if potential: target_col = potential[-1]
+            else: return {"error": "Колонка пульса не найдена."}
 
-        if target_col is None:
-            return {"error": f"Не удалось найти данные пульса. Колонки в файле: {list(df.columns[:5])}"}
+        # 5. Превращаем в числа и берем последнее значение
+        values = pd.to_numeric(df[target_col], errors='coerce').dropna()
 
-        # 5. Чистим данные
-        valid_data = pd.to_numeric(df[target_col], errors='coerce').dropna()
+        if values.empty:
+            return {"error": "В выбранной колонке нет числовых данных."}
+
+        latest_hr = float(values.iloc[-1])
         
-        if valid_data.empty:
-            return {"error": "Колонка найдена, но в ней нет чисел."}
-
-        latest_hr = float(valid_data.iloc[-1])
-        
-        # 6. Итоговая оценка
+        # 6. Аналитика
         if 50 <= latest_hr <= 85:
             db_status, score = "Optimal", 0.98
         elif 86 <= latest_hr <= 105:
@@ -59,7 +63,7 @@ def analyze_crew_health(file_content: bytes, file_name: str = "data.csv"):
             db_status, score = "Critical", 0.35
 
         return {
-            "metric": "Samsung Health Data",
+            "metric": "Samsung Health HR",
             "value": latest_hr,
             "readiness_score": score,
             "status": db_status,
@@ -67,4 +71,4 @@ def analyze_crew_health(file_content: bytes, file_name: str = "data.csv"):
         }
 
     except Exception as e:
-        return {"error": f"Ошибка: {str(e)}"}
+        return {"error": f"Ошибка системы: {str(e)}"}
