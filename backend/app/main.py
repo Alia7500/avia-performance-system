@@ -35,10 +35,10 @@ async def upload_health_data(
 
     # 3. Сохраняем в Neon
     new_log = models.PerformanceLog(
-        crew_member_id=uuid.uuid4(), # Пока временный ID
+        crew_member_id=uuid.uuid4(),
         calculation_timestamp=datetime.now(),
         performance_score=result["readiness_score"] * 100,
-        performance_level=result["status"],
+        performance_level=result["status"],  # Здесь теперь будет четко 'Optimal', 'Reduced' или 'Critical'
         contributing_factors=result
     )
     
