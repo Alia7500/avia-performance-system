@@ -4,60 +4,60 @@ from datetime import datetime
 
 def analyze_crew_health(file_content: bytes, file_name: str = "data.csv"):
     try:
+        # 1. Декодируем и чистим файл от лишних строк Samsung
         raw_text = file_content.decode('utf-8', errors='ignore')
         lines = raw_text.splitlines()
         
-        header_idx = -1
-        for i, line in enumerate(lines[:15]):
-            if 'heart_rate' in line.lower() and ',' in line:
-                header_idx = i
+        # Ищем, где реально начинаются данные (строка с "source,tag_id")
+        start_line = 0
+        for i, line in enumerate(lines):
+            if 'heart_rate' in line and ',' in line:
+                start_line = i
                 break
         
-        if header_idx == -1:
-            return {"error": "Не удалось найти структуру таблицы в файле"}
-        
-        df = pd.read_csv(io.StringIO('\n'.join(lines[header_idx:])), on_bad_lines='skip', engine='python')
+        # Читаем CSV только с нужного места
+        df = pd.read_csv(io.StringIO('\n'.join(lines[start_line:])))
 
-        target_col = None
-        for col in df.columns:
-            if 'heart_rate.heart_rate' in col.lower() or (col.lower() == 'heart_rate'):
-                target_col = col
-                break
+        # 2. Ищем колонку с пульсом (она может называться по-разному)
+        hr_col = 'com.samsung.health.heart_rate.heart_rate'
         
-        if not target_col:
-            potential = [c for c in df.columns if 'heart_rate' in c.lower()]
-            if potential: target_col = potential[-1]
-            else: return {"error": "Колонка пульса не найдена"}
+        if hr_col not in df.columns:
+            # Если точное имя не найдено, ищем любую колонку со словом "heart_rate"
+            potential_cols = [c for c in df.columns if 'heart_rate' in c.lower() and 'count' not in c.lower()]
+            if potential_cols:
+                hr_col = potential_cols[-1] # Берем последнюю подходящую
+            else:
+                return {"error": f"Колонка не найдена. Доступны: {list(df.columns[:3])}"}
 
-        values = pd.to_numeric(df[target_col], errors='coerce').dropna()
-        if values.empty:
-            return {"error": "В файле нет числовых данных о пульсе"}
+        # 3. ПРЕВРАЩАЕМ В ЧИСЛА (самый важный момент)
+        # errors='coerce' превратит мусор в NaN, а потом мы их выкинем
+        df[hr_col] = pd.to_numeric(df[hr_col], errors='coerce')
+        valid_series = df[hr_col].dropna()
 
-        latest_hr = float(values.iloc[-1])
+        if valid_series.empty:
+            return {"error": "Числовые данные не найдены в колонке. Проверьте формат файла."}
+
+        # Берем САМОЕ ПОСЛЕДНЕЕ значение в файле (самый свежий замер)
+        latest_hr = float(valid_series.iloc[-1])
         
-        # --- ИСПРАВЛЕННАЯ ЛОГИКА ДЛЯ БАЗЫ ДАННЫХ ---
-        # Мы должны возвращать только: 'Optimal', 'Acceptable', 'Reduced', 'Critical'
-        if 50 <= latest_hr <= 80:
-            db_status = "Optimal"
-            display_text = "Ready for Flight"
+        # 4. ЛОГИКА АГЕНТА (Медицинские критерии)
+        if 50 <= latest_hr <= 85:
             score = 0.98
-        elif 81 <= latest_hr <= 95:
-            db_status = "Reduced"
-            display_text = "Elevated Stress"
+            status = "Optimal (Ready for Flight)"
+        elif 86 <= latest_hr <= 100:
             score = 0.70
+            status = "Warning (High Stress/Fatigue)"
         else:
-            db_status = "Critical"
-            display_text = "High Fatigue"
-            score = 0.35
-
+            score = 0.30
+            status = "Critical (Not Fit for Duty)"
+            
         return {
-            "metric": "Samsung Health HR",
+            "metric": "Heart Rate Analysis",
             "value": latest_hr,
             "readiness_score": score,
-            "status": db_status, # Это пойдет в ENUM базы
-            "display_status": display_text, # А это для красоты
-            "analyzed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "status": status,
+            "analyzed_at": datetime.now().isoformat()
         }
 
     except Exception as e:
-        return {"error": f"Ошибка: {str(e)}"}
+        return {"error": f"Ошибка парсинга: {str(e)}"}
