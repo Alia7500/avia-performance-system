@@ -7,3 +7,5 @@ pandas
 scikit-learn
 python-dotenv
 python-multipart
+passlib[bcrypt]
+python-jose[cryptography]
