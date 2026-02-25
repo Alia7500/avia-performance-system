@@ -34,11 +34,21 @@ async def upload_health_data(
         raise HTTPException(status_code=400, detail=result["error"])
 
     # 3. Сохраняем в Neon
+    #new_log = models.PerformanceLog(
+    #    crew_member_id=uuid.uuid4(),
+    #    calculation_timestamp=datetime.now(),
+    #    performance_score=result["readiness_score"] * 100,
+    #    performance_level=result["status"],  # Здесь теперь будет четко 'Optimal', 'Reduced' или 'Critical'
+    #    contributing_factors=result
+    #)
+    # Используем твой созданный ID капитана
+    VALENTINA_ID = "99999999-9999-4999-9999-999999999999"
+    
     new_log = models.PerformanceLog(
-        crew_member_id=uuid.uuid4(),
+        crew_member_id=VALENTINA_ID, # Теперь база примет этот ID
         calculation_timestamp=datetime.now(),
         performance_score=result["readiness_score"] * 100,
-        performance_level=result["status"],  # Здесь теперь будет четко 'Optimal', 'Reduced' или 'Critical'
+        performance_level=result["status"],
         contributing_factors=result
     )
     
