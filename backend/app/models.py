@@ -10,30 +10,33 @@ class User(Base):
     password_hash = Column(String)
     first_name = Column(String)
     last_name = Column(String)
-    # МЕНЯЕМ role на role_id, как в твоей базе Neon
-    role_id = Column(UUID(as_uuid=True), nullable=True) 
+    role_id = Column(UUID(as_uuid=True), ForeignKey("roles.role_id"))
+    # Базовые медицинские показатели для ИИ
+    baseline_hr = Column(Integer, default=70)      # Твой нормальный пульс
+    baseline_sys_bp = Column(Integer, default=120) # Твое нормальное давление
 
 class Flight(Base):
     __tablename__ = "flights"
     flight_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    flight_number = Column(String, unique=True)
-    departure = Column(String)
-    arrival = Column(String)
-    start_time = Column(DateTime)
-    end_time = Column(DateTime)
-    status = Column(String, default="scheduled") # scheduled, active, completed
+    flight_number = Column(String)
+    departure_airport = Column(String)
+    arrival_airport = Column(String)
+    scheduled_departure = Column(DateTime(timezone=True))
+    scheduled_arrival = Column(DateTime(timezone=True))
+    tail_number = Column(String, ForeignKey("aircrafts.tail_number"))
+    status = Column(String)
 
 class FlightAssignment(Base):
     __tablename__ = "flight_assignments"
-    id = Column(Integer, primary_key=True)
+    assignment_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     flight_id = Column(UUID(as_uuid=True), ForeignKey("flights.flight_id"))
     crew_member_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    role_on_board = Column(String) # 'КВС', 'Бортпроводник' и т.д.
 
 class PerformanceLog(Base):
     __tablename__ = "performance_analytics_log"
     log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    crew_member_id = Column(UUID(as_uuid=True))
-    calculation_timestamp = Column(DateTime)
+    crew_member_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
     performance_score = Column(Float)
-    performance_level = Column(String)
+    performance_level = Column(String) # 'Допущен', 'Отстранен'
     contributing_factors = Column(JSON)
