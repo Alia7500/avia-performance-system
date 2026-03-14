@@ -123,8 +123,19 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
     if not user or not security.verify_password(str(form_data.get('password')), user.password_hash):
         raise HTTPException(status_code=400, detail="Неверный логин или пароль")
     
+    # Ищем должность в таблице flight_crew_members
+    crew_info = db.query(models.FlightAssignment).filter(models.FlightAssignment.crew_member_id == user.user_id).first()
+    # Или напрямую из связанной таблицы (если она есть)
+    position_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": user.user_id}).fetchone()
+    position = position_res[0] if position_res else "Сотрудник"
+
     token = security.create_access_token(data={"sub": str(user.user_id)})
-    return {"access_token": token, "token_type": "bearer", "fio": f"{user.last_name} {user.first_name}"}
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "fio": f"{user.last_name} {user.first_name}",
+        "position": position # ОТПРАВЛЯЕМ РЕАЛЬНУЮ ДОЛЖНОСТЬ
+    }
 
 @app.post("/admin/create_user", tags=["Администратор"])
 async def admin_create_user(
@@ -232,6 +243,27 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
         } if flight_res else None,
         "telemetry_history": history
     }
+
+# 2. НОВЫЙ ЭНДПОИНТ: Все рейсы конкретного сотрудника
+@app.get("/crew/my-flights", tags=["Экипаж"])
+async def get_my_flights(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
+    result = db.execute(text("""
+        SELECT f.flight_number, f.departure_airport, f.arrival_airport, 
+               f.scheduled_departure, f.scheduled_arrival, fa.role_on_board
+        FROM flights f
+        JOIN flight_assignments fa ON f.flight_id = fa.flight_id
+        WHERE fa.crew_member_id = :u
+        ORDER BY f.scheduled_departure ASC
+    """), {"u": user.user_id}).fetchall()
+    
+    return [
+        {
+            "number": r[0], "from": r[1], "to": r[2], 
+            "dep": r[3].strftime("%d.%m %H:%M"), 
+            "arr": r[4].strftime("%d.%m %H:%M"),
+            "role": r[5]
+        } for r in result
+    ]
 
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
 def get_fleet_status(db: Session = Depends(database.get_db)):
