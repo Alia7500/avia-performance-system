@@ -277,3 +277,29 @@ def get_fleet_status(db: Session = Depends(database.get_db)):
         GROUP BY f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport
     """), {"now": now}).fetchall()
     return [{"flight_number": r[0], "dep": r[1], "arr": r[2], "avg_score": r[3]} for r in active]
+
+@app.get("/dispatcher/monitor", tags=["Диспетчер"])
+def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
+    now = datetime.now(timezone.utc)
+    # Ищем рейсы в небе и считаем средний балл экипажа
+    active_flights = db.execute(text("""
+        SELECT 
+            f.flight_number, 
+            f.departure_airport, 
+            f.arrival_airport, 
+            f.tail_number,
+            AVG(ft.performance_score) as avg_score,
+            MAX(ft.heart_rate) as max_hr,
+            COUNT(CASE WHEN ft.performance_score < 50 THEN 1 END) as members_at_risk
+        FROM flights f
+        JOIN flight_telemetry ft ON f.flight_id = ft.flight_id
+        WHERE f.scheduled_departure <= :now AND f.scheduled_arrival >= :now
+        GROUP BY f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number
+    """), {"now": now}).fetchall()
+
+    return [
+        {
+            "flight": r[0], "route": f"{r[1]} ➔ {r[2]}", "tail": r[3],
+            "score": round(r[4] or 0), "peak_hr": r[5], "alerts": r[6]
+        } for r in active_flights
+    ]

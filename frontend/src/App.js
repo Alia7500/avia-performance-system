@@ -12,7 +12,7 @@ function App() {
     try {
       const res = await axios.post('/auth/login', { username: email, password });
       localStorage.setItem('token', res.data.access_token);
-      setUser({ fio: res.data.fio, role: 'crew_member' });
+      setUser({ fio: res.data.fio, position: res.data.position });
     } catch (err) {
       alert("Ошибка входа!");
     }
