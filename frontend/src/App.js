@@ -8,15 +8,21 @@ function App() {
   const [password, setPassword] = useState('');
 
   const handleLogin = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await axios.post('/auth/login', { username: email, password });
-      localStorage.setItem('token', res.data.access_token);
-      setUser({ fio: res.data.fio, position: res.data.position });
-    } catch (err) {
-      alert("Ошибка входа!");
-    }
-  };
+  e.preventDefault();
+  try {
+    const res = await axios.post('/auth/login', { username: email, password });
+    localStorage.setItem('token', res.data.access_token);
+    
+    // МЫ ДОЛЖНЫ СОХРАНЯТЬ РОЛЬ, ЧТОБЫ DASHBOARD ЕЕ ВИДЕЛ!
+    setUser({ 
+        fio: res.data.fio, 
+        role: email.includes('dispatcher') ? 'dispatcher' : 'crew_member', // Упрощенная проверка
+        position: res.data.position 
+    });
+  } catch (err) {
+    alert("Ошибка входа!");
+  }
+};
 
   if (!user) {
     return (
