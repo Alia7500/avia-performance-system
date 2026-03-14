@@ -136,19 +136,14 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
     }
 
 @app.get("/admin/staff", tags=["Администратор"])
-def get_all_staff(admin: Annotated[models.User, Depends(get_current_admin)], db: Session = Depends(database.get_db)):
-    """Вывод списка всех сотрудников (исправлено для JSON)"""
+def get_all_staff(db: Session = Depends(database.get_db)):
     result = db.execute(text("""
         SELECT u.first_name, u.last_name, u.baseline_hr, fcm.position 
         FROM users u 
-        LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
+        JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
     """)).fetchall()
-    
-    # Превращаем в список словарей, чтобы FastAPI смог отправить это как JSON
-    return [
-        {"first_name": r[0], "last_name": r[1], "baseline_hr": r[2], "position": r[3] or "Врач/Админ"} 
-        for r in result
-    ]
+    # ПРЕВРАЩАЕМ В СПИСОК СЛОВАРЕЙ (Это уберет ошибку ValueError)
+    return [{"first_name": r[0], "last_name": r[1], "baseline_hr": r[2], "position": r[3]} for r in result]
 
 @app.get("/crew/dashboard", tags=["Экипаж"])
 async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):

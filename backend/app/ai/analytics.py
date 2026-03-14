@@ -1,44 +1,40 @@
-import pandas as pd
-import io
 import re
 from datetime import datetime
 
-def analyze_crew_health(file_content: bytes, user_baseline_hr: int = 70):
+def analyze_crew_health(file_content: bytes, user_baseline_hr: int = 75):
     try:
+        # 1. Декодируем файл в текст, игнорируя ошибки кодировки
         text = file_content.decode('utf-8', errors='ignore')
         
-        pattern = r',(\d{2,3}(?:\.\d+)?),'
-        matches = re.findall(pattern, text)
+        # 2. Ищем все числа, которые похожи на пульс (от 40 до 180)
+        # Ищем цифры после запятой или в начале строки
+        hr_values = re.findall(r'(?:^|,|;)(\d{2,3}(?:\.\d+)?)(?:,|;|$)', text)
         
-        if not matches:
-            all_numbers = re.findall(r'\b(\d{2,3}(?:\.\d+)?)\b', text)
-            matches =[n for n in all_numbers if 40 <= float(n) <= 190]
+        # Фильтруем только те, что реально могут быть пульсом человека
+        valid_hr = [float(v) for v in hr_values if 40 <= float(v) <= 180]
+        
+        if not valid_hr:
+            return {"error": "В файле не найдено подходящих данных пульса (40-180 bpm)"}
 
-        if not matches:
-            return {"error": "Данные пульса не обнаружены"}
-
-        latest_hr = float(matches[-1])
+        # Берем среднее за последние замеры для стабильности
+        latest_hr = sum(valid_hr[-5:]) / len(valid_hr[-5:])
         
-        # --- ПЕРСОНАЛИЗИРОВАННАЯ ЛОГИКА ИИ ---
-        # Вычисляем отклонение от персональной нормы человека
-        deviation = latest_hr - user_baseline_hr
-        
-        if deviation <= 15: # До 15 ударов выше нормы - это нормально при подготовке к рейсу
-            db_status, score = "Допущен", 0.98
-        elif 16 <= deviation <= 30: # Сильный стресс
-            db_status, score = "Внимание", 0.70
-        else: # Аномалия
-            db_status, score = "Отстранен", 0.30
+        # РЕЗУЛЬТАТ ДЛЯ ИИ
+        diff = latest_hr - user_baseline_hr
+        if diff <= 15:
+            status, score = "Optimal", 0.98
+        elif diff <= 25:
+            status, score = "Reduced", 0.75
+        else:
+            status, score = "Critical", 0.40
 
         return {
-            "metric": "ЧСС (Анализ Samsung Watch)",
-            "current_value": latest_hr,
-            "baseline_value": user_baseline_hr,
-            "deviation": deviation,
+            "metric": "Samsung Watch HR",
+            "value": round(latest_hr, 1),
             "readiness_score": score,
-            "status": db_status,
-            "analyzed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "status": status,
+            "analyzed_at": datetime.now().isoformat(),
+            "data_points": len(valid_hr)
         }
-
     except Exception as e:
-        return {"error": f"Сбой ИИ: {str(e)}"}
+        return {"error": f"Ошибка ИИ-модуля: {str(e)}"}
