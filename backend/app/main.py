@@ -154,6 +154,17 @@ def admin_create_user(
     db.commit()
     return {"status": "успех", "message": "Сотрудник добавлен"}
 
+@app.get("/admin/staff", tags=["Администратор"])
+def get_all_staff(db: Session = Depends(database.get_db)):
+    # Возвращаем список всех 1200 человек
+    result = db.execute(text("""
+        SELECT u.first_name, u.last_name, u.baseline_hr, fcm.position 
+        FROM users u 
+        JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
+        LIMIT 100
+    """)).fetchall()
+    return result
+
 @app.post("/crew/upload-health", tags=["Экипаж"])
 async def upload_health(
     user: Annotated[models.User, Depends(get_current_user)], # В начало (без default)
