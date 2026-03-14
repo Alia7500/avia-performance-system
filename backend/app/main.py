@@ -123,27 +123,25 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
     if not user or not security.verify_password(str(form_data.get('password')), user.password_hash):
         raise HTTPException(status_code=400, detail="Неверный логин или пароль")
     
-    # Получаем роль
     role_res = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": user.role_id}).fetchone()
     role_name = role_res[0] if role_res else "crew_member"
     
-    # Маппинг ролей на русский
-    role_map = {
-        "administrator": "Администратор",
-        "crew_member": "Член экипажа",
-        "medical_worker": "Медработник",
-        "dispatcher": "Диспетчер"
-    }
+    # Ищем должность в таблице экипажей
+    pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": user.user_id}).fetchone()
+    if pos_res:
+        position = pos_res[0]
+    else:
+        # Если это диспетчер или админ (их нет в летной таблице)
+        position = "Диспетчер ЦУП" if role_name == 'dispatcher' else "Сотрудник"
 
     token = security.create_access_token(data={"sub": str(user.user_id)})
     return {
         "access_token": token, 
         "token_type": "bearer", 
         "fio": f"{user.last_name} {user.first_name}",
-        "role": role_name, # Оставляем для логики фронта
-        "role_ru": role_map.get(role_name, "Сотрудник") # Для отображения
+        "role": role_name,
+        "position": position # РЕАЛЬНАЯ ДОЛЖНОСТЬ!
     }
-
 
 @app.post("/admin/create_user", tags=["Администратор"])
 async def admin_create_user(
@@ -289,19 +287,28 @@ def get_fleet_status(db: Session = Depends(database.get_db)):
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
 def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
-    # Находим активные рейсы с деталями экипажа
+    # Вытягиваем рейсы и ПРИНУДИТЕЛЬНО присоединяем к ним экипаж (flight_assignments)
     active_flights = db.execute(text("""
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
-               (SELECT json_agg(json_build_object('fio', u.last_name || ' ' || u.first_name, 'hr', ft.heart_rate, 'score', ft.performance_score))
-                FROM flight_telemetry ft 
-                JOIN users u ON ft.crew_member_id = u.user_id 
-                WHERE ft.flight_id = f.flight_id AND ft.record_timestamp = (SELECT MAX(record_timestamp) FROM flight_telemetry WHERE flight_id = f.flight_id)
-               ) as crew_status
+               to_char(f.scheduled_departure at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_dep,
+               to_char(f.scheduled_arrival at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_arr,
+               (SELECT json_agg(json_build_object(
+                    'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
+                    'role', fa.role_on_board,
+                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0)
+                ))
+                FROM flight_assignments fa
+                JOIN users u ON fa.crew_member_id = u.user_id
+                WHERE fa.flight_id = f.flight_id
+               ) as crew_list
         FROM flights f
         WHERE f.scheduled_departure <= :now AND f.scheduled_arrival >= :now
     """), {"now": now}).fetchall()
 
     return [
-        {"id": r[0], "number": r[1], "dep": r[2], "arr": r[3], "tail": r[4], "crew": r[5] or []} 
-        for r in active_flights
+        {
+            "flight": r[1], "dep": r[2], "arr": r[3], "tail": r[4], 
+            "time_dep": r[5], "time_arr": r[6], "crew": r[7] or[]
+        } for r in active_flights
     ]
