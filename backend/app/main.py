@@ -296,25 +296,34 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
     active_flights = db.execute(text("""
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
-               to_char(f.scheduled_departure at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_dep,
-               to_char(f.scheduled_arrival at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_arr,
+               to_char(f.scheduled_departure at time zone 'UTC+3', 'HH24:MI') as time_dep,
+               to_char(f.scheduled_arrival at time zone 'UTC+3', 'HH24:MI') as time_arr,
                f.current_lat, f.current_lon, f.true_track,
                (SELECT json_agg(json_build_object(
+                    'uid', u.user_id,
                     'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
                     'role', fa.role_on_board,
+                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
                     'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
-                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0)
+                    'history', (SELECT json_agg(json_build_object('hr', heart_rate, 'score', performance_score)) 
+                                FROM (SELECT heart_rate, performance_score FROM flight_telemetry 
+                                      WHERE crew_member_id = u.user_id AND flight_id = f.flight_id 
+                                      ORDER BY record_timestamp DESC LIMIT 20) as hist)
                 ))
                 FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
-               ) as crew_list
-        FROM flights f
-        WHERE f.status = 'В полёте'
+               ) as crew_details
+        FROM flights f WHERE f.status = 'В полёте'
     """)).fetchall()
 
-    return [{
-        "flight": r[1], "dep": r[2], "arr": r[3], "tail": r[4] or "Не назначен", 
-        "time_dep": r[5], "time_arr": r[6], "lat": r[7], "lon": r[8], "heading": r[9], "crew": r[10] or[]
-    } for r in active_flights]
+    return [
+        {
+            "id": str(r[0]), "number": r[1], "dep": r[2], "arr": r[3], "tail": r[4],
+            "time_dep": r[5], "time_arr": r[6], "lat": float(r[7]) if r[7] else None, 
+            "lon": float(r[8]) if r[8] else None, "heading": r[9], 
+            "crew": r[10] or []
+        } for r in active_flights
+    ]
+    
 def check_flight_delays():
     """Сверяет план с реальностью и вычисляет задержку"""
     db = next(database.get_db())
