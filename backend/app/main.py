@@ -315,6 +315,53 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
         "flight": r[1], "dep": r[2], "arr": r[3], "tail": r[4] or "Не назначен", 
         "time_dep": r[5], "time_arr": r[6], "lat": r[7], "lon": r[8], "heading": r[9], "crew": r[10] or[]
     } for r in active_flights]
+def check_flight_delays():
+    """Сверяет план с реальностью и вычисляет задержку"""
+    db = next(database.get_db())
+    now = datetime.now(timezone.utc)
+    
+    # Ищем рейсы, которые должны вылететь в ближайшие 2 часа
+    upcoming_flights = db.execute(text("""
+        SELECT flight_id, flight_number, scheduled_departure 
+        FROM flights 
+        WHERE status = 'Запланирован' 
+        AND scheduled_departure <= :limit
+    """), {"limit": now + timedelta(hours=2)}).fetchall()
+
+    for f in upcoming_flights:
+        # Пытаемся найти этот борт на радаре
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Мы используем позывной AFL + номер (например AFL1478)
+        res = requests.get(f"https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers)
+        
+        if res.status_code == 200:
+            data = res.json()
+            found_on_radar = False
+            for key, val in data.items():
+                if key in ['full_count', 'version', 'stats']: continue
+                if val[13] == f.flight_number: # Нашли наш рейс в небе или на рулении
+                    found_on_radar = True
+                    break
+            
+            # ЛОГИКА: Если время вылета прошло, а самолета нет на радаре (не взлетел)
+            if not found_on_radar and now > f.scheduled_departure + timedelta(minutes=15):
+                delay = (now - f.scheduled_departure).total_seconds() // 60
+                db.execute(text("""
+                    UPDATE flights SET status = 'Задержан', delay_minutes = :d 
+                    WHERE flight_id = :id
+                """), {"d": delay, "id": f.flight_id})
+                logger.warning(f"⚠️ Рейс {f.flight_number} задерживается на {delay} мин.")
+    db.commit()
+    db.close()
+
+# Добавь эту задачу в планировщик (startup)
+@app.on_event("startup")
+def start_scheduler():
+    scheduler = BackgroundScheduler(timezone="Europe/Moscow")
+    scheduler.add_job(sync_flightradar, 'interval', minutes=1)
+    scheduler.add_job(check_flight_delays, 'interval', minutes=1) # Проверка задержек каждую минуту!
+    scheduler.add_job(simulate_flight_telemetry, 'interval', minutes=2)
+    scheduler.start()
 
 
 @app.get("/history", tags=["Экипаж"])
