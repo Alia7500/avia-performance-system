@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Наши модули
+# Наши внутренние модули
 from app import models, database
 from app.core import security
 from app.ai.analytics import analyze_crew_health
@@ -22,12 +22,12 @@ from app.ai.analytics import analyze_crew_health
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Авто-создание таблиц при запуске
+# Принудительное создание/обновление таблиц в Neon
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Авиа-Агент МС-21: Система Мониторинга")
 
-# Настройка CORS для связи с Фронтендом
+# Настройка CORS для связи с фронтендом
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,45 +38,44 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-# --- СИСТЕМА БЕЗОПАСНОСТИ ---
+# --- ЗАВИСИМОСТИ (БЕЗОПАСНОСТЬ) ---
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Session = Depends(database.get_db)):
     try:
         payload = jwt.decode(token, security.SECRET_KEY, algorithms=[security.ALGORITHM])
         user_id = payload.get("sub")
         if user_id is None:
-            raise HTTPException(status_code=401, detail="Невалидный токен")
+            raise HTTPException(status_code=401, detail="Ошибка авторизации")
     except JWTError:
-        raise HTTPException(status_code=401, detail="Ошибка авторизации")
+        raise HTTPException(status_code=401, detail="Токен недействителен")
     
     user = db.query(models.User).filter(models.User.user_id == user_id).first()
     if user is None:
-        raise HTTPException(status_code=401, detail="Сотрудник не найден")
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
     return user
 
 async def get_current_admin(current_user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    # Проверка роли через SQL (самый надежный способ)
-    role = db.execute(text(f"SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": current_user.role_id}).fetchone()
-    if not role or role[0] != 'administrator':
-        raise HTTPException(status_code=403, detail="Доступ только для Администратора")
+    # Проверка роли через SQL запрос для точности
+    role_res = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": current_user.role_id}).fetchone()
+    if not role_res or role_res[0] != 'administrator':
+        raise HTTPException(status_code=403, detail="Требуются права Администратора")
     return current_user
 
-# --- ИИ-СИМУЛЯТОР ТЕЛЕМЕТРИИ В НЕБЕ ---
+# --- ФОНОВЫЕ ЗАДАЧИ ---
 
 def simulate_flight_telemetry():
-    """Фоновый процесс: каждые 2 минуты генерирует пульс для тех, кто в полете"""
+    """Фоновый агент: генерирует пульс и ИИ-анализ для тех, кто в небе"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
     
     try:
-        # Находим рейсы, которые сейчас в воздухе
+        # Находим активные рейсы
         active_flights = db.execute(text("""
             SELECT flight_id FROM flights 
             WHERE scheduled_departure <= :now AND scheduled_arrival >= :now
         """), {"now": now}).fetchall()
 
         for f in active_flights:
-            # Получаем экипаж рейса
             crew = db.execute(text("""
                 SELECT u.user_id, u.baseline_hr FROM users u 
                 JOIN flight_assignments fa ON u.user_id = fa.crew_member_id 
@@ -84,30 +83,25 @@ def simulate_flight_telemetry():
             """), {"f_id": f[0]}).fetchall()
 
             for member in crew:
-                # Имитация работы датчиков часов
-                hr = member[1] + random.randint(-5, 15)
-                stress = random.randint(10, 45)
-                # ИИ-расчет работоспособности
-                dev = abs(hr - member[1])
-                perf = max(0, 100 - (dev * 1.8) - (stress * 0.3))
+                hr = member.baseline_hr + random.randint(-5, 15)
+                stress = random.randint(10, 40)
+                # Расчет ИИ: отклонение от нормы
+                dev = abs(hr - member.baseline_hr)
+                perf = max(0, 100 - (dev * 2) - (stress / 4))
                 
                 db.execute(text("""
-                    INSERT INTO flight_telemetry 
-                    (flight_id, crew_member_id, heart_rate, spo2, stress_level, performance_score, record_timestamp)
-                    VALUES (:f, :u, :hr, :o, :s, :p, :t)
-                """), {
-                    "f": f[0], "u": member[0], "hr": hr, "o": random.randint(95, 99), 
-                    "s": stress, "p": perf, "t": now
-                })
+                    INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, stress_level, performance_score, record_timestamp)
+                    VALUES (:f, :u, :hr, 98, :s, :p, :ts)
+                """), {"f": f[0], "u": member.user_id, "hr": hr, "s": stress, "p": perf, "ts": now})
         db.commit()
     except Exception as e:
-        logger.error(f"Ошибка симулятора: {e}")
+        logger.error(f"Ошибка симуляции: {e}")
     finally:
         db.close()
 
 def nightly_roster_sync():
-    """Ночное планирование (заглушка для расширения)"""
-    logger.info("🌙 Ночной диспетчер проверил расписание.")
+    """Заглушка для ночного планировщика"""
+    logger.info("🌙 Ночной цикл планирования запущен...")
 
 @app.on_event("startup")
 def start_scheduler():
@@ -115,12 +109,13 @@ def start_scheduler():
     scheduler.add_job(simulate_flight_telemetry, 'interval', minutes=2)
     scheduler.add_job(nightly_roster_sync, 'cron', hour=0, minute=10)
     scheduler.start()
+    logger.info("🚀 Фоновые ИИ-службы запущены")
 
-# --- API ЭНДПОИНТЫ ---
+# --- ЭНДПОИНТЫ API ---
 
 @app.get("/", tags=["Общие"])
 def read_root():
-    return {"система": "Авиа-Агент МС-21", "статус": "Работает"}
+    return {"система": "Агент МС-21", "статус": "Онлайн", "версия": "1.1.0-FIXED"}
 
 @app.post("/auth/login", tags=["Авторизация"])
 def login(form_data: dict, db: Session = Depends(database.get_db)):
@@ -129,26 +124,69 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
         raise HTTPException(status_code=400, detail="Неверный логин или пароль")
     
     token = security.create_access_token(data={"sub": str(user.user_id)})
-    return {
-        "access_token": token, 
-        "token_type": "bearer", 
-        "fio": f"{user.last_name} {user.first_name}"
-    }
+    return {"access_token": token, "token_type": "bearer", "fio": f"{user.last_name} {user.first_name}"}
+
+@app.post("/admin/create_user", tags=["Администратор"])
+async def admin_create_user(
+    admin: Annotated[models.User, Depends(get_current_admin)], 
+    user_data: dict, 
+    db: Session = Depends(database.get_db)
+):
+    hashed_pwd = security.get_password_hash(str(user_data['password']))
+    new_user = models.User(
+        user_id=uuid.uuid4(),
+        email=user_data['email'],
+        password_hash=hashed_pwd,
+        first_name=user_data['first_name'],
+        last_name=user_data['last_name'],
+        patronymic=user_data.get('patronymic'),
+        role_id=user_data['role_id'],
+        baseline_hr=user_data.get('baseline_hr', 75)
+    )
+    db.add(new_user)
+    db.commit()
+    return {"status": "успех", "message": "Сотрудник добавлен"}
 
 @app.get("/admin/staff", tags=["Администратор"])
-def get_all_staff(db: Session = Depends(database.get_db)):
+def get_all_staff(admin: Annotated[models.User, Depends(get_current_admin)], db: Session = Depends(database.get_db)):
     result = db.execute(text("""
         SELECT u.first_name, u.last_name, u.baseline_hr, fcm.position 
         FROM users u 
         JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
     """)).fetchall()
-    # ПРЕВРАЩАЕМ В СПИСОК СЛОВАРЕЙ (Это уберет ошибку ValueError)
     return [{"first_name": r[0], "last_name": r[1], "baseline_hr": r[2], "position": r[3]} for r in result]
+
+@app.post("/crew/upload-health", tags=["Экипаж"])
+async def upload_health(
+    user: Annotated[models.User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(database.get_db)],
+    file: UploadFile = File(...)
+):
+    content = await file.read()
+    result = analyze_crew_health(content, user.baseline_hr)
+    
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    try:
+        new_log = models.PerformanceLog(
+            crew_member_id=user.user_id,
+            calculation_timestamp=datetime.now(timezone.utc),
+            performance_score=result["readiness_score"] * 100,
+            performance_level=result["status"],
+            contributing_factors=result
+        )
+        db.add(new_log)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка сохранения лога: {e}")
+    
+    return result
 
 @app.get("/crew/dashboard", tags=["Экипаж"])
 async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    """Личный кабинет сотрудника"""
-    # 1. Последние 20 записей телеметрии (для графиков)
+    # 1. Получаем историю телеметрии
     tele_res = db.execute(text("""
         SELECT heart_rate, performance_score, record_timestamp 
         FROM flight_telemetry 
@@ -156,53 +194,36 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
         ORDER BY record_timestamp DESC LIMIT 20
     """), {"u": user.user_id}).fetchall()
     
-    # 2. Текущий рейс
+    # 2. Получаем текущий рейс
     flight_res = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport
         FROM flights f
         JOIN flight_assignments fa ON f.flight_id = fa.flight_id
-        WHERE fa.crew_member_id = :u AND f.scheduled_departure <= NOW() AND f.scheduled_arrival >= NOW()
-        LIMIT 1
+        WHERE fa.crew_member_id = :u 
+        AND f.scheduled_departure <= NOW() + INTERVAL '12 hours'
+        ORDER BY f.scheduled_departure DESC LIMIT 1
     """), {"u": user.user_id}).fetchone()
+
+    history = []
+    for r in tele_res:
+        history.append({
+            "heart_rate": r[0],
+            "performance_score": r[1],
+            "record_timestamp": r[2].isoformat() if r[2] else None
+        })
 
     return {
         "fio": f"{user.last_name} {user.first_name}",
-        "текущий_рейс": {"flight_number": flight_res[0], "departure_airport": flight_res[1], "arrival_airport": flight_res[2]} if flight_res else None,
-        "telemetry_history": [
-            {"heart_rate": r[0], "performance_score": float(r[1]), "record_timestamp": r[2].isoformat()} 
-            for r in tele_res
-        ]
+        "текущий_рейс": {
+            "flight_number": flight_res[0],
+            "departure_airport": flight_res[1],
+            "arrival_airport": flight_res[2]
+        } if flight_res else None,
+        "telemetry_history": history
     }
 
-@app.post("/crew/upload-health", tags=["Экипаж"])
-async def upload_health(
-    user: Annotated[models.User, Depends(get_current_user)],
-    db: Session = Depends(database.get_db),
-    file: UploadFile = File(...)
-):
-    """Анализ данных Samsung Watch (исправленный порядок аргументов)"""
-    content = await file.read()
-    result = analyze_crew_health(content, user.baseline_hr)
-    
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-
-    # Запись в лог аналитики
-    new_log = models.PerformanceLog(
-        log_id=uuid.uuid4(),
-        crew_member_id=user.user_id,
-        calculation_timestamp=datetime.now(),
-        performance_score=float(result["readiness_score"]) * 100,
-        performance_level=result["status"],
-        contributing_factors=result
-    )
-    db.add(new_log)
-    db.commit()
-    return result
-
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
-def monitor_flights(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    """Общий мониторинг всех рейсов в небе"""
+def get_fleet_status(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
     active = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport, 
@@ -212,8 +233,4 @@ def monitor_flights(user: Annotated[models.User, Depends(get_current_user)], db:
         WHERE f.scheduled_departure <= :now AND f.scheduled_arrival >= :now
         GROUP BY f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport
     """), {"now": now}).fetchall()
-    
-    return [
-        {"flight_number": r[0], "dep": r[1], "arr": r[2], "avg_readiness": float(r[3]) if r[3] else 0} 
-        for r in active
-    ]
+    return [{"flight_number": r[0], "dep": r[1], "arr": r[2], "avg_score": r[3]} for r in active]

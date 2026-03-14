@@ -81,7 +81,7 @@ class PerformanceLog(Base):
     __tablename__ = "performance_analytics_log"
     log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     crew_member_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
-    calculation_timestamp = Column(DateTime(timezone=True), default=datetime.now) # ПРОВЕРЬ ЭТО
+    calculation_timestamp = Column(DateTime(timezone=True), default=datetime.now) # ТУТ БЫЛА ОШИБКА
     performance_score = Column(Float)
     performance_level = Column(String)
     contributing_factors = Column(JSON)
