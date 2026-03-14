@@ -186,21 +186,25 @@ async def upload_health(
 
 @app.get("/crew/dashboard", tags=["Экипаж"])
 async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    # 1. Получаем историю телеметрии
+    # 1. Получаем ПОСЛЕДНИЙ рассчитанный ИИ балл (из загруженных файлов)
+    last_log = db.query(models.PerformanceLog).filter(
+        models.PerformanceLog.crew_member_id == user.user_id
+    ).order_by(models.PerformanceLog.calculation_timestamp.desc()).first()
+
+    # 2. Получаем историю телеметрии (для графика)
     tele_res = db.execute(text("""
         SELECT heart_rate, performance_score, record_timestamp 
         FROM flight_telemetry 
         WHERE crew_member_id = :u 
-        ORDER BY record_timestamp DESC LIMIT 20
+        ORDER BY record_timestamp DESC LIMIT 30
     """), {"u": user.user_id}).fetchall()
     
-    # 2. Получаем текущий рейс
+    # 3. Ищем текущий или ближайший рейс
     flight_res = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport
         FROM flights f
         JOIN flight_assignments fa ON f.flight_id = fa.flight_id
         WHERE fa.crew_member_id = :u 
-        AND f.scheduled_departure <= NOW() + INTERVAL '12 hours'
         ORDER BY f.scheduled_departure DESC LIMIT 1
     """), {"u": user.user_id}).fetchone()
 
@@ -212,8 +216,15 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
             "record_timestamp": r[2].isoformat() if r[2] else None
         })
 
+    # Если в небе данных нет, но есть загруженный файл - используем его для большой цифры
+    current_score = last_log.performance_score if last_log else 0
+    if history:
+        current_score = history[0]["performance_score"]
+
     return {
         "fio": f"{user.last_name} {user.first_name}",
+        "score": round(current_score), # Тот самый процент
+        "status": last_log.performance_level if last_log else "Нет данных",
         "текущий_рейс": {
             "flight_number": flight_res[0],
             "departure_airport": flight_res[1],
