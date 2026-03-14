@@ -81,9 +81,7 @@ const CrewPage = ({ user, onLogout }) => {
             <div className="flex items-center gap-4 bg-white dark:bg-slate-800 p-2 pr-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
                <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-lg">{user.fio[0]}</div>
                <div className="text-left leading-tight">
-                  <p className="text-blue-500 font-bold uppercase text-[10px] tracking-widest mt-1">
-   {user.position}: {user.fio}
-</p>
+                  <p className="font-bold text-sm">{user.fio}</p>
                   <p className="text-[9px] text-blue-600 dark:text-blue-400 font-black uppercase tracking-widest">{user.position}</p>
                </div>
             </div>

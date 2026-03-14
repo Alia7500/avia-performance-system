@@ -17,6 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app import models, database
 from app.core import security
 from app.ai.analytics import analyze_crew_health
+import requests
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,35 @@ async def get_current_admin(current_user: Annotated[models.User, Depends(get_cur
     return current_user
 
 # --- ФОНОВЫЕ ЗАДАЧИ ---
+def sync_with_real_radar():
+    """Фоновый процесс: сверка с реальным небом через OpenSky API"""
+    try:
+        # Запрашиваем данные обо ВСЕХ самолетах в мире прямо сейчас
+        res = requests.get("https://opensky-network.org/api/states/all")
+        if res.status_code == 200:
+            states = res.json().get('states',[])
+            
+            # Фильтруем только Аэрофлот (позывной начинается на AFL)
+            aeroflot_live = [s for s in states if s[1].strip().startswith('AFL')]
+            
+            db = next(database.get_db())
+            for flight in aeroflot_live:
+                callsign = flight[1].strip() # например, AFL1478 (это SU1478)
+                flight_num = callsign.replace('AFL', 'SU')
+                lon, lat = flight[5], flight[6] # Координаты
+                alt = flight[7] # Высота
+                
+                # Обновляем наш рейс в базе!
+                db.execute(text("""
+                    UPDATE flights 
+                    SET current_lat = :lat, current_lon = :lon, altitude = :alt, status = 'В полёте'
+                    WHERE flight_number = :f_num 
+                    AND scheduled_departure <= NOW() + INTERVAL '2 hours'
+                    AND scheduled_arrival >= NOW() - INTERVAL '2 hours'
+                """), {"lat": lat, "lon": lon, "alt": alt, "f_num": flight_num})
+            db.commit()
+    except Exception as e:
+        print("Ошибка связи с радаром:", e)
 
 def simulate_flight_telemetry():
     """Фоновый агент: генерирует пульс и ИИ-анализ для тех, кто в небе"""
