@@ -1,3 +1,5 @@
+import datetime
+
 from sqlalchemy import Column, String, Float, DateTime, JSON, ForeignKey, Boolean, Integer
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -37,6 +39,7 @@ class PerformanceLog(Base):
     __tablename__ = "performance_analytics_log"
     log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     crew_member_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    calculation_timestamp = Column(DateTime(timezone=True), default=datetime.now) # ПРОВЕРЬ ЭТО
     performance_score = Column(Float)
-    performance_level = Column(String) # 'Допущен', 'Отстранен'
+    performance_level = Column(String)
     contributing_factors = Column(JSON)
