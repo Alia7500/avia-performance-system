@@ -2,8 +2,9 @@ import os
 import uuid
 import random
 import logging
+import requests
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, List
+from typing import Annotated
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,22 +14,21 @@ from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Наши внутренние модули
+# --- НАШИ МОДУЛИ ---
 from app import models, database
 from app.core import security
 from app.ai.analytics import analyze_crew_health
-import requests
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Принудительное создание/обновление таблиц в Neon
+# Создание таблиц
 models.Base.metadata.create_all(bind=database.engine)
 
-app = FastAPI(title="Авиа-Агент МС-21: Система Мониторинга")
+app = FastAPI(title="Авиа-Агент МС-21: Центр Управления")
 
-# Настройка CORS для связи с фронтендом
+# CORS для фронтенда
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,7 +39,9 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-# --- ЗАВИСИМОСТИ (БЕЗОПАСНОСТЬ) ---
+# ==========================================
+# 1. БЕЗОПАСНОСТЬ И АВТОРИЗАЦИЯ
+# ==========================================
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Session = Depends(database.get_db)):
     try:
@@ -56,55 +58,54 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Se
     return user
 
 async def get_current_admin(current_user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    # Проверка роли через SQL запрос для точности
-    role_res = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": current_user.role_id}).fetchone()
-    if not role_res or role_res[0] != 'administrator':
+    role = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": current_user.role_id}).fetchone()
+    if not role or role[0] != 'administrator':
         raise HTTPException(status_code=403, detail="Требуются права Администратора")
     return current_user
 
-# --- ФОНОВЫЕ ЗАДАЧИ ---
-def sync_with_real_radar():
-    """Фоновый процесс: сверка с реальным небом через OpenSky API"""
+
+# ==========================================
+# 2. ФОНОВЫЕ ПРОЦЕССЫ (ИИ И РАДАР)
+# ==========================================
+
+def sync_flightradar():
+    """Синхронизация координат с радаром Flightradar24"""
     try:
-        # Запрашиваем данные обо ВСЕХ самолетах в мире прямо сейчас
-        res = requests.get("https://opensky-network.org/api/states/all")
+        db = next(database.get_db())
+        # Обновляем статусы по расписанию
+        db.execute(text("UPDATE flights SET status = 'В полёте' WHERE scheduled_departure <= NOW() AND scheduled_arrival >= NOW()"))
+        db.commit()
+
+        # Запрашиваем радар Аэрофлота
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0'}
+        res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers, timeout=10)
+        
         if res.status_code == 200:
-            states = res.json().get('states',[])
-            
-            # Фильтруем только Аэрофлот (позывной начинается на AFL)
-            aeroflot_live = [s for s in states if s[1].strip().startswith('AFL')]
-            
-            db = next(database.get_db())
-            for flight in aeroflot_live:
-                callsign = flight[1].strip() # например, AFL1478 (это SU1478)
-                flight_num = callsign.replace('AFL', 'SU')
-                lon, lat = flight[5], flight[6] # Координаты
-                alt = flight[7] # Высота
+            data = res.json()
+            updated = 0
+            for key, val in data.items():
+                if key in ['full_count', 'version', 'stats']: continue
+                lat, lon, heading, flight_num = val[1], val[2], val[3], val[13]
                 
-                # Обновляем наш рейс в базе!
-                db.execute(text("""
-                    UPDATE flights 
-                    SET current_lat = :lat, current_lon = :lon, altitude = :alt, status = 'В полёте'
-                    WHERE flight_number = :f_num 
-                    AND scheduled_departure <= NOW() + INTERVAL '2 hours'
-                    AND scheduled_arrival >= NOW() - INTERVAL '2 hours'
-                """), {"lat": lat, "lon": lon, "alt": alt, "f_num": flight_num})
+                if flight_num:
+                    db.execute(text("""
+                        UPDATE flights 
+                        SET current_lat = :lat, current_lon = :lon, true_track = :hdg
+                        WHERE flight_number = :fnum AND status = 'В полёте'
+                    """), {"lat": lat, "lon": lon, "hdg": heading, "fnum": flight_num})
+                    updated += 1
             db.commit()
     except Exception as e:
-        print("Ошибка связи с радаром:", e)
+        pass
+    finally:
+        db.close()
 
 def simulate_flight_telemetry():
-    """Фоновый агент: генерирует пульс и ИИ-анализ для тех, кто в небе"""
+    """Генерация биометрии (ЧСС, Стресс) для экипажей в полете"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
-    
     try:
-        # Находим активные рейсы
-        active_flights = db.execute(text("""
-            SELECT flight_id FROM flights 
-            WHERE scheduled_departure <= :now AND scheduled_arrival >= :now
-        """), {"now": now}).fetchall()
-
+        active_flights = db.execute(text("SELECT flight_id FROM flights WHERE status = 'В полёте'")).fetchall()
         for f in active_flights:
             crew = db.execute(text("""
                 SELECT u.user_id, u.baseline_hr FROM users u 
@@ -113,11 +114,11 @@ def simulate_flight_telemetry():
             """), {"f_id": f[0]}).fetchall()
 
             for member in crew:
-                hr = member.baseline_hr + random.randint(-5, 15)
+                hr = member.baseline_hr + random.randint(-5, 20)
                 stress = random.randint(10, 40)
-                # Расчет ИИ: отклонение от нормы
+                # ИИ логика отклонения от нормы
                 dev = abs(hr - member.baseline_hr)
-                perf = max(0, 100 - (dev * 2) - (stress / 4))
+                perf = max(0, 100 - (dev * 1.5) - (stress / 4))
                 
                 db.execute(text("""
                     INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, stress_level, performance_score, record_timestamp)
@@ -125,27 +126,26 @@ def simulate_flight_telemetry():
                 """), {"f": f[0], "u": member.user_id, "hr": hr, "s": stress, "p": perf, "ts": now})
         db.commit()
     except Exception as e:
-        logger.error(f"Ошибка симуляции: {e}")
+        pass
     finally:
         db.close()
-
-def nightly_roster_sync():
-    """Заглушка для ночного планировщика"""
-    logger.info("🌙 Ночной цикл планирования запущен...")
 
 @app.on_event("startup")
 def start_scheduler():
     scheduler = BackgroundScheduler(timezone="Europe/Moscow")
+    scheduler.add_job(sync_flightradar, 'interval', minutes=1)
     scheduler.add_job(simulate_flight_telemetry, 'interval', minutes=2)
-    scheduler.add_job(nightly_roster_sync, 'cron', hour=0, minute=10)
     scheduler.start()
-    logger.info("🚀 Фоновые ИИ-службы запущены")
+    logger.info("🚀 Радар и ИИ-телеметрия запущены")
 
-# --- ЭНДПОИНТЫ API ---
+
+# ==========================================
+# 3. API ЭНДПОИНТЫ
+# ==========================================
 
 @app.get("/", tags=["Общие"])
 def read_root():
-    return {"система": "Агент МС-21", "статус": "Онлайн", "версия": "1.1.0-FIXED"}
+    return {"система": "Агент МС-21", "статус": "Онлайн", "версия": "2.0.0"}
 
 @app.post("/auth/login", tags=["Авторизация"])
 def login(form_data: dict, db: Session = Depends(database.get_db)):
@@ -156,21 +156,21 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
     role_res = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": user.role_id}).fetchone()
     role_name = role_res[0] if role_res else "crew_member"
     
-    # Ищем должность в таблице экипажей
+    # Достаем должность (КВС, Бортпроводник или Диспетчер)
     pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": user.user_id}).fetchone()
-    if pos_res:
-        position = pos_res[0]
-    else:
-        # Если это диспетчер или админ (их нет в летной таблице)
-        position = "Диспетчер ЦУП" if role_name == 'dispatcher' else "Сотрудник"
+    position = pos_res[0] if pos_res else ("Диспетчер ЦУП" if role_name == 'dispatcher' else "Администратор")
+
+    # Перевод ролей для фронтенда
+    role_map = {"administrator": "Администратор", "crew_member": "Член экипажа", "medical_worker": "Медработник", "dispatcher": "Диспетчер"}
 
     token = security.create_access_token(data={"sub": str(user.user_id)})
     return {
         "access_token": token, 
         "token_type": "bearer", 
-        "fio": f"{user.last_name} {user.first_name}",
-        "role": role_name,
-        "position": position # РЕАЛЬНАЯ ДОЛЖНОСТЬ!
+        "fio": f"{user.last_name} {user.first_name}", 
+        "role": role_name, 
+        "role_ru": role_map.get(role_name, "Сотрудник"),
+        "position": position
     }
 
 @app.post("/admin/create_user", tags=["Администратор"])
@@ -195,11 +195,12 @@ async def admin_create_user(
     return {"status": "успех", "message": "Сотрудник добавлен"}
 
 @app.get("/admin/staff", tags=["Администратор"])
-def get_all_staff(admin: Annotated[models.User, Depends(get_current_admin)], db: Session = Depends(database.get_db)):
+def get_all_staff(db: Session = Depends(database.get_db)):
     result = db.execute(text("""
         SELECT u.first_name, u.last_name, u.baseline_hr, fcm.position 
         FROM users u 
         JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
+        LIMIT 100
     """)).fetchall()
     return [{"first_name": r[0], "last_name": r[1], "baseline_hr": r[2], "position": r[3]} for r in result]
 
@@ -227,50 +228,41 @@ async def upload_health(
         db.commit()
     except Exception as e:
         db.rollback()
-        logger.error(f"Ошибка сохранения лога: {e}")
     
     return result
 
 @app.get("/crew/dashboard", tags=["Экипаж"])
 async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    # 1. Получаем ПОСЛЕДНИЙ рассчитанный ИИ балл (из загруженных файлов)
+    # Последний ИИ-расчет
     last_log = db.query(models.PerformanceLog).filter(
         models.PerformanceLog.crew_member_id == user.user_id
     ).order_by(models.PerformanceLog.calculation_timestamp.desc()).first()
 
-    # 2. Получаем историю телеметрии (для графика)
+    # История телеметрии
     tele_res = db.execute(text("""
         SELECT heart_rate, performance_score, record_timestamp 
         FROM flight_telemetry 
         WHERE crew_member_id = :u 
-        ORDER BY record_timestamp DESC LIMIT 30
+        ORDER BY record_timestamp DESC LIMIT 20
     """), {"u": user.user_id}).fetchall()
     
-    # 3. Ищем текущий или ближайший рейс
+    # Текущий рейс
     flight_res = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport
         FROM flights f
         JOIN flight_assignments fa ON f.flight_id = fa.flight_id
-        WHERE fa.crew_member_id = :u 
+        WHERE fa.crew_member_id = :u AND f.scheduled_departure <= NOW() + INTERVAL '12 hours'
         ORDER BY f.scheduled_departure DESC LIMIT 1
     """), {"u": user.user_id}).fetchone()
 
-    history = []
-    for r in tele_res:
-        history.append({
-            "heart_rate": r[0],
-            "performance_score": r[1],
-            "record_timestamp": r[2].isoformat() if r[2] else None
-        })
+    history = [{"heart_rate": r[0], "performance_score": r[1], "record_timestamp": str(r[2])} for r in tele_res]
 
-    # Если в небе данных нет, но есть загруженный файл - используем его для большой цифры
     current_score = last_log.performance_score if last_log else 0
-    if history:
-        current_score = history[0]["performance_score"]
+    if history: current_score = history[0]["performance_score"]
 
     return {
         "fio": f"{user.last_name} {user.first_name}",
-        "score": round(current_score), # Тот самый процент
+        "score": round(current_score),
         "status": last_log.performance_level if last_log else "Нет данных",
         "текущий_рейс": {
             "flight_number": flight_res[0],
@@ -280,7 +272,6 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
         "telemetry_history": history
     }
 
-# 2. НОВЫЙ ЭНДПОИНТ: Все рейсы конкретного сотрудника
 @app.get("/crew/my-flights", tags=["Экипаж"])
 async def get_my_flights(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
     result = db.execute(text("""
@@ -289,56 +280,58 @@ async def get_my_flights(user: Annotated[models.User, Depends(get_current_user)]
         FROM flights f
         JOIN flight_assignments fa ON f.flight_id = fa.flight_id
         WHERE fa.crew_member_id = :u
-        ORDER BY f.scheduled_departure ASC
+        ORDER BY f.scheduled_departure ASC LIMIT 50
     """), {"u": user.user_id}).fetchall()
     
-    return [
+    return[
         {
             "number": r[0], "from": r[1], "to": r[2], 
-            "dep": r[3].strftime("%d.%m %H:%M"), 
-            "arr": r[4].strftime("%d.%m %H:%M"),
+            "dep": r[3].strftime("%d.%m %H:%M"), "arr": r[4].strftime("%d.%m %H:%M"),
             "role": r[5]
         } for r in result
     ]
 
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
-def get_fleet_status(db: Session = Depends(database.get_db)):
-    now = datetime.now(timezone.utc)
-    active = db.execute(text("""
-        SELECT f.flight_number, f.departure_airport, f.arrival_airport, 
-               AVG(ft.performance_score) as avg_readiness
-        FROM flights f
-        LEFT JOIN flight_telemetry ft ON f.flight_id = ft.flight_id
-        WHERE f.scheduled_departure <= :now AND f.scheduled_arrival >= :now
-        GROUP BY f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport
-    """), {"now": now}).fetchall()
-    return [{"flight_number": r[0], "dep": r[1], "arr": r[2], "avg_score": r[3]} for r in active]
-
-@app.get("/dispatcher/monitor", tags=["Диспетчер"])
 def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
-    # Вытягиваем рейсы и ПРИНУДИТЕЛЬНО присоединяем к ним экипаж (flight_assignments)
     active_flights = db.execute(text("""
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
                to_char(f.scheduled_departure at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_dep,
                to_char(f.scheduled_arrival at time zone 'UTC'+ interval '3 hours', 'HH24:MI') as time_arr,
+               f.current_lat, f.current_lon, f.true_track,
                (SELECT json_agg(json_build_object(
                     'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
                     'role', fa.role_on_board,
                     'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
                     'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0)
                 ))
-                FROM flight_assignments fa
-                JOIN users u ON fa.crew_member_id = u.user_id
-                WHERE fa.flight_id = f.flight_id
+                FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
                ) as crew_list
         FROM flights f
-        WHERE f.scheduled_departure <= :now AND f.scheduled_arrival >= :now
-    """), {"now": now}).fetchall()
+        WHERE f.status = 'В полёте'
+    """)).fetchall()
 
+    return [{
+        "flight": r[1], "dep": r[2], "arr": r[3], "tail": r[4] or "Не назначен", 
+        "time_dep": r[5], "time_arr": r[6], "lat": r[7], "lon": r[8], "heading": r[9], "crew": r[10] or[]
+    } for r in active_flights]
+
+
+@app.get("/history", tags=["Экипаж"])
+async def get_medical_history(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
+    """Возвращает историю ИИ-анализов (загруженных файлов) для вкладки История здоровья"""
+    logs = db.execute(text("""
+        SELECT calculation_timestamp, performance_score, performance_level 
+        FROM performance_analytics_log
+        WHERE crew_member_id = :u
+        ORDER BY calculation_timestamp DESC LIMIT 50
+    """), {"u": user.user_id}).fetchall()
+    
     return [
         {
-            "flight": r[1], "dep": r[2], "arr": r[3], "tail": r[4], 
-            "time_dep": r[5], "time_arr": r[6], "crew": r[7] or[]
-        } for r in active_flights
+            "calculation_timestamp": r[0].isoformat() if r[0] else None,
+            "performance_score": r[1],
+            "performance_level": r[2],
+            "crew_member_id": str(user.user_id) # Важно для фильтрации на фронтенде
+        } for r in logs
     ]
