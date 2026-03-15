@@ -247,6 +247,9 @@ def sync_single_destination(dest_code, dest_name, date_from, date_to, tails, air
         try:
             with engine.begin() as conn:
                 conn.execute(text("""
+                    DELETE FROM flights 
+                    WHERE departure_airport = :dep AND arrival_airport = :arr     AND status = 'Запланирован'"""), {"dep": "SVO", "arr": dest_code}) # Или наоборот, в зависимости от направления
+                conn.execute(text("""
                     INSERT INTO flights (
                         flight_number, departure_airport, arrival_airport,
                         scheduled_departure, scheduled_arrival, tail_number, status
