@@ -109,7 +109,7 @@ def sync_flightradar():
         db.close()
 
 def simulate_flight_telemetry():
-    """Генерация полной биометрии: Пульс, SpO2, Давление, Температура, Стресс"""
+    """Генерация биометрии в полете"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
     try:
@@ -122,25 +122,18 @@ def simulate_flight_telemetry():
             """), {"f_id": f[0]}).fetchall()
 
             for member in crew:
-                hr = member.baseline_hr + random.randint(-5, 15)
+                hr = member.baseline_hr + random.randint(-5, 20)
                 stress = random.randint(10, 40)
-                
-                # Добавляем реалистичные мед. показатели
-                spo2 = random.randint(95, 99)
-                sys_bp = random.randint(110, 130)
-                dia_bp = random.randint(70, 85)
-                temp = round(random.uniform(36.4, 37.0), 1)
-                bp = f"{sys_bp}/{dia_bp}"
-                
                 perf = max(0, 100 - (abs(hr - member.baseline_hr) * 1.5) - (stress / 4))
-                
                 db.execute(text("""
-                    INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, blood_pressure, temperature, stress_level, performance_score, record_timestamp)
-                    VALUES (:f, :u, :hr, :spo2, :bp, :temp, :s, :p, :ts)
-                """), {"f": f[0], "u": member.user_id, "hr": hr, "spo2": spo2, "bp": bp, "temp": temp, "s": stress, "p": perf, "ts": now})
+                    INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, stress_level, performance_score, record_timestamp)
+                    VALUES (:f, :u, :hr, 98, :s, :p, :ts)
+                """), {"f": f[0], "u": member.user_id, "hr": hr, "s": stress, "p": perf, "ts": now})
         db.commit()
-    except Exception as e: pass
-    finally: db.close()
+    except Exception as e:
+        logger.error(f"Ошибка симуляции: {e}")
+    finally:
+        db.close()
 
 @app.on_event("startup")
 def start_scheduler():

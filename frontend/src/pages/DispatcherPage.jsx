@@ -92,8 +92,6 @@ const DispatcherPage = ({ user, onLogout }) => {
     const load = async () => {
       try {
         const res = await api.get('/dispatcher/monitor');
-        const active = (Array.isArray(res.data) ? res.data : []).filter(f => f.status === 'В полёте');
-        setMonitorData(active);
         setMonitorData(Array.isArray(res.data) ? res.data :[]);
         setLastSync(new Date());
       } catch (e) { console.error(e); }
