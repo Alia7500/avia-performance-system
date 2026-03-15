@@ -323,7 +323,7 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
             "crew": r[10] or []
         } for r in active_flights
     ]
-    
+
 def check_flight_delays():
     """Сверяет план с реальностью и вычисляет задержку"""
     db = next(database.get_db())
