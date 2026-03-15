@@ -84,33 +84,28 @@ def update_flight_statuses():
     finally: db.close()
 
 def sync_flightradar():
+    db = next(database.get_db())
     try:
-        db = next(database.get_db())
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers, timeout=10)
-        
+        res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", timeout=10)
         if res.status_code == 200:
             data = res.json()
             for key, val in data.items():
                 if key in ['full_count', 'version', 'stats']: continue
-                lat, lon, heading, flight_num = val[1], val[2], val[3], val[13]
+                lat, lon, hdg, fnum = val[1], val[2], val[3], val[13]
                 
-                if flight_num:
-                    # Магия: добавляем новую точку в JSON-массив path_history
-                    db.execute(text("""
-                        UPDATE flights 
-                        SET current_lat = :lat, 
-                            current_lon = :lon, 
-                            true_track = :hdg,
-                            status = 'В полёте',
-                            path_history = path_history || jsonb_build_array(jsonb_build_array(:lat, :lon))
-                        WHERE flight_number = :fnum AND status IN ('Запланирован', 'В полёте', 'Задержан')
-                    """), {"lat": lat, "lon": lon, "hdg": heading, "fnum": flight_num})
+                # 🔥 ИСПРАВЛЕНИЕ: Мы обновляем ТОЛЬКО ОДИН рейс для конкретного борта
+                # который находится в небе ПРЯМО СЕЙЧАС.
+                db.execute(text("""
+                    UPDATE flights 
+                    SET current_lat = :lat, current_lon = :lon, true_track = :hdg
+                    WHERE flight_number = :fnum 
+                    AND status = 'В полёте'
+                    AND scheduled_departure <= NOW() 
+                    AND scheduled_arrival >= NOW()
+                """), {"lat": lat, "lon": lon, "hdg": hdg, "fnum": fnum})
             db.commit()
-    except Exception as e:
-        logger.error(f"Ошибка радара: {e}")
-    finally:
-        db.close()
+    except Exception as e: logger.error(e)
+    finally: db.close()
 
 def simulate_flight_telemetry():
     """Генерация полной биометрии: Пульс, SpO2, Давление, Температура, Стресс"""
