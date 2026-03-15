@@ -84,31 +84,27 @@ def update_flight_statuses():
     finally: db.close()
 
 def sync_flightradar():
+    """Каждую минуту берем реальные координаты Аэрофлота с FlightRadar24"""
     try:
         db = next(database.get_db())
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers, timeout=10)
         
         if res.status_code == 200:
             data = res.json()
             for key, val in data.items():
-                if key in ['full_count', 'version', 'stats']: continue
+                if key in['full_count', 'version', 'stats']: continue
                 lat, lon, heading, flight_num = val[1], val[2], val[3], val[13]
                 
                 if flight_num:
-                    # Магия: добавляем новую точку в JSON-массив path_history
                     db.execute(text("""
                         UPDATE flights 
-                        SET current_lat = :lat, 
-                            current_lon = :lon, 
-                            true_track = :hdg,
-                            status = 'В полёте',
-                            path_history = path_history || jsonb_build_array(jsonb_build_array(:lat, :lon))
-                        WHERE flight_number = :fnum AND status IN ('Запланирован', 'В полёте', 'Задержан')
+                        SET current_lat = :lat, current_lon = :lon, true_track = :hdg
+                        WHERE flight_number = :fnum AND status = 'В полёте'
                     """), {"lat": lat, "lon": lon, "hdg": heading, "fnum": flight_num})
             db.commit()
     except Exception as e:
-        logger.error(f"Ошибка радара: {e}")
+        logger.error(f"Ошибка FlightRadar: {e}")
     finally:
         db.close()
 
