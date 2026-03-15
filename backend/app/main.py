@@ -19,24 +19,12 @@ from app import models, database
 from app.core import security
 from app.ai.analytics import analyze_crew_health
 
-# Настройка логирования
+# --- НАСТРОЙКА И ЗАПУСК ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Создание таблиц
 models.Base.metadata.create_all(bind=database.engine)
-
 app = FastAPI(title="Авиа-Агент МС-21: Центр Управления")
-
-# CORS для фронтенда
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 # ==========================================
@@ -65,91 +53,86 @@ async def get_current_admin(current_user: Annotated[models.User, Depends(get_cur
 
 
 # ==========================================
-# 2. ФОНОВЫЕ ПРОЦЕССЫ (СИМУЛЯЦИЯ, ЗАДЕРЖКИ И РАДАР)
+# 2. ФОНОВЫЕ ПРОЦЕССЫ (ИИ, ЗАДЕРЖКИ, РАДАР)
 # ==========================================
 
 def update_flight_statuses():
-    """Только честные статусы по расписанию, никаких случайных задержек"""
+    """Следит за временем: Завершает рейсы, запускает новые и имитирует задержки"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
     try:
+        # Завершаем прилетевшие
         db.execute(text("UPDATE flights SET status = 'Завершён' WHERE status = 'В полёте' AND scheduled_arrival <= :now"), {"now": now})
         
+        # Запускаем новые (с учетом задержки)
         db.execute(text("""
             UPDATE flights SET status = 'В полёте', actual_departure = COALESCE(actual_departure, scheduled_departure) 
             WHERE status IN ('Запланирован', 'Задержан') AND (scheduled_departure + (COALESCE(delay_minutes, 0) * interval '1 minute')) <= :now
         """), {"now": now})
+        
+        # Имитируем задержки для 15% рейсов, вылетающих в ближайший час
+        db.execute(text("""
+            UPDATE flights SET status = 'Задержан', delay_minutes = floor(random() * 45 + 15)::int
+            WHERE status = 'Запланирован' AND scheduled_departure BETWEEN :now AND :now + INTERVAL '60 minutes' AND random() < 0.15
+        """), {"now": now})
+        
         db.commit()
-    except Exception as e: logger.error(e)
-    finally: db.close()
+    except Exception as e: 
+        logger.error(f"Ошибка обновления статусов: {e}")
+    finally: 
+        db.close()
 
 def sync_flightradar():
+    """Синхронизация координат с радаром Flightradar24"""
     db = next(database.get_db())
     try:
-        res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", timeout=10)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
             for key, val in data.items():
-                if key in ['full_count', 'version', 'stats']: continue
-                lat, lon, hdg, fnum = val[1], val[2], val[3], val[13]
-                
-                # 🔥 ИСПРАВЛЕНИЕ: Мы обновляем ТОЛЬКО ОДИН рейс для конкретного борта
-                # который находится в небе ПРЯМО СЕЙЧАС.
-                db.execute(text("""
-                    UPDATE flights 
-                    SET current_lat = :lat, current_lon = :lon, true_track = :hdg
-                    WHERE flight_number = :fnum 
-                    AND status = 'В полёте'
-                    AND scheduled_departure <= NOW() 
-                    AND scheduled_arrival >= NOW()
-                """), {"lat": lat, "lon": lon, "hdg": hdg, "fnum": fnum})
+                if key in ['full_count', 'version', 'stats'] or len(val) < 14: continue
+                lat, lon, heading, flight_num = val[1], val[2], val[3], val[13]
+                if flight_num:
+                    db.execute(text("""
+                        UPDATE flights SET current_lat = :lat, current_lon = :lon, true_track = :hdg
+                        WHERE flight_number = :fnum AND status = 'В полёте'
+                    """), {"lat": lat, "lon": lon, "hdg": heading, "fnum": flight_num})
             db.commit()
-    except Exception as e: logger.error(e)
-    finally: db.close()
+    except Exception as e:
+        logger.error(f"Ошибка радара: {e}")
+    finally:
+        db.close()
 
-def simulate_flight_telemetry():
-    """Генерация полной биометрии: Пульс, SpO2, Давление, Температура, Стресс"""
+def simulate_telemetry():
+    """Генерация биометрии экипажей в полете"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
     try:
         active_flights = db.execute(text("SELECT flight_id FROM flights WHERE status = 'В полёте'")).fetchall()
         for f in active_flights:
-            crew = db.execute(text("""
-                SELECT u.user_id, u.baseline_hr FROM users u 
-                JOIN flight_assignments fa ON u.user_id = fa.crew_member_id 
-                WHERE fa.flight_id = :f_id
-            """), {"f_id": f[0]}).fetchall()
-
+            crew = db.execute(text("SELECT u.user_id, u.baseline_hr FROM users u JOIN flight_assignments fa ON u.user_id = fa.crew_member_id WHERE fa.flight_id = :f_id"), {"f_id": f[0]}).fetchall()
             for member in crew:
-                hr = member.baseline_hr + random.randint(-5, 15)
+                hr = member.baseline_hr + random.randint(-5, 20)
                 stress = random.randint(10, 40)
-                
-                # Добавляем реалистичные мед. показатели
-                spo2 = random.randint(95, 99)
-                sys_bp = random.randint(110, 130)
-                dia_bp = random.randint(70, 85)
-                temp = round(random.uniform(36.4, 37.0), 1)
-                bp = f"{sys_bp}/{dia_bp}"
-                
                 perf = max(0, 100 - (abs(hr - member.baseline_hr) * 1.5) - (stress / 4))
-                
-                db.execute(text("""
-                    INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, blood_pressure, temperature, stress_level, performance_score, record_timestamp)
-                    VALUES (:f, :u, :hr, :spo2, :bp, :temp, :s, :p, :ts)
-                """), {"f": f[0], "u": member.user_id, "hr": hr, "spo2": spo2, "bp": bp, "temp": temp, "s": stress, "p": perf, "ts": now})
+                db.execute(text("""INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, stress_level, performance_score, record_timestamp, blood_pressure, temperature)
+                                   VALUES (:f, :u, :hr, :o, :s, :p, :t, :bp, :temp)"""), 
+                           {"f": f[0], "u": member.user_id, "hr": hr, "o": random.randint(95, 99), "s": stress, "p": perf, "t": now, "bp": f"12{random.randint(0,8)}/80", "temp": round(random.uniform(36.5, 37.1), 1)})
         db.commit()
-    except Exception as e: pass
-    finally: db.close()
+    except Exception as e:
+        logger.error(f"Ошибка симуляции: {e}")
+    finally:
+        db.close()
 
 @app.on_event("startup")
 def start_scheduler():
     scheduler = BackgroundScheduler(timezone="Europe/Moscow")
     scheduler.add_job(update_flight_statuses, 'interval', minutes=1)
     scheduler.add_job(sync_flightradar, 'interval', minutes=1)
-    scheduler.add_job(simulate_flight_telemetry, 'interval', minutes=2)
+    scheduler.add_job(simulate_telemetry, 'interval', minutes=2)
     scheduler.start()
     logger.info("🚀 Оперативный Диспетчер, Радар и ИИ-Агент запущены")
-
 
 # ==========================================
 # 3. API ЭНДПОИНТЫ
@@ -157,7 +140,7 @@ def start_scheduler():
 
 @app.get("/", tags=["Общие"])
 def read_root():
-    return {"система": "Агент МС-21", "статус": "Онлайн", "версия": "4.0.0-FINAL"}
+    return {"система": "Агент МС-21", "статус": "Онлайн", "версия": "5.0-FINAL"}
 
 @app.post("/auth/login", tags=["Авторизация"])
 def login(form_data: dict, db: Session = Depends(database.get_db)):
@@ -173,97 +156,65 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
 
     token = security.create_access_token(data={"sub": str(user.user_id)})
     return {
-        "access_token": token, 
-        "token_type": "bearer", 
+        "access_token": token, "token_type": "bearer", 
         "fio": f"{user.last_name} {user.first_name}", 
-        "role": role_name, 
-        "position": position
+        "role": role_name, "position": position
     }
 
-@app.post("/admin/create_user", tags=["Администратор"])
-async def admin_create_user(
-    admin: Annotated[models.User, Depends(get_current_admin)], 
-    user_data: dict, 
-    db: Session = Depends(database.get_db)
-):
-    hashed_pwd = security.get_password_hash(str(user_data['password']))
-    new_user = models.User(
-        user_id=uuid.uuid4(),
-        email=user_data['email'],
-        password_hash=hashed_pwd,
-        first_name=user_data['first_name'],
-        last_name=user_data['last_name'],
-        patronymic=user_data.get('patronymic'),
-        role_id=user_data['role_id'],
-        baseline_hr=user_data.get('baseline_hr', 75)
-    )
-    db.add(new_user)
-    db.commit()
-    return {"status": "успех", "message": "Сотрудник добавлен"}
-
-@app.get("/admin/staff", tags=["Администратор"])
-def get_all_staff(db: Session = Depends(database.get_db)):
-    result = db.execute(text("""
-        SELECT u.first_name, u.last_name, u.baseline_hr, fcm.position 
-        FROM users u 
-        JOIN flight_crew_members fcm ON u.user_id = fcm.user_id 
-        LIMIT 100
-    """)).fetchall()
-    return[{"first_name": r[0], "last_name": r[1], "baseline_hr": r[2], "position": r[3]} for r in result]
-
-@app.post("/crew/upload-health", tags=["Экипаж"])
-async def upload_health(
-    user: Annotated[models.User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(database.get_db)],
-    file: UploadFile = File(...)
-):
-    content = await file.read()
-    result = analyze_crew_health(content, user.baseline_hr)
+@app.get("/dispatcher/monitor", tags=["Диспетчер"])
+def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
+    now_utc = datetime.now(timezone.utc)
+    flights = db.execute(text("""
+        SELECT 
+            f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
+            f.scheduled_departure, f.scheduled_arrival, f.status, COALESCE(f.delay_minutes, 0) as delay,
+            f.current_lat, f.current_lon, f.true_track,
+            (SELECT json_agg(json_build_object(
+                    'uid', u.user_id, 'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 'role', fa.role_on_board,
+                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'spo2', COALESCE((SELECT spo2 FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'bp', COALESCE((SELECT blood_pressure FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), '---'),
+                    'temp', COALESCE((SELECT temperature FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'stress', COALESCE((SELECT stress_level FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'history', (SELECT json_agg(json_build_object('hr', heart_rate, 'score', performance_score)) FROM (SELECT * FROM flight_telemetry WHERE crew_member_id=u.user_id AND flight_id=f.flight_id ORDER BY record_timestamp DESC LIMIT 15) as h)
+                ))
+                FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id
+                WHERE fa.flight_id = f.flight_id
+            ) as crew
+        FROM flights f
+        WHERE f.status IN ('В полёте', 'Задержан') OR (f.scheduled_departure > :now_utc AND f.scheduled_departure < :now_utc + INTERVAL '3 hours')
+        ORDER BY f.scheduled_departure ASC
+    """), {"now_utc": now_utc}).fetchall()
     
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-
-    try:
-        new_log = models.PerformanceLog(
-            crew_member_id=user.user_id,
-            calculation_timestamp=datetime.now(timezone.utc),
-            performance_score=result["readiness_score"] * 100,
-            performance_level=result["status"],
-            contributing_factors=result
-        )
-        db.add(new_log)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Ошибка сохранения лога: {e}")
-    
+    result = []
+    for r in flights:
+        dep_dt = r.scheduled_departure.astimezone(timezone(timedelta(hours=3)))
+        arr_dt = r.scheduled_arrival.astimezone(timezone(timedelta(hours=3)))
+        
+        progress = 0
+        if r.status == 'В полёте' and r.scheduled_departure and r.scheduled_arrival:
+            total_duration = (r.scheduled_arrival - r.scheduled_departure).total_seconds()
+            elapsed = (now_utc - r.scheduled_departure).total_seconds()
+            if total_duration > 0:
+                progress = round((elapsed / total_duration) * 100)
+        
+        result.append({
+            "id": str(r.flight_id), "number": r.flight_number, "dep": r.departure_airport, "arr": r.arrival_airport, "tail": r.tail_number or "Резерв",
+            "time_dep": dep_dt.strftime("%H:%M"), "time_arr": arr_dt.strftime("%H:%M"), 
+            "status": r.status, "delay": r.delay,
+            "lat": float(r.current_lat) if r.current_lat else None, "lon": float(r.current_lon) if r.current_lon else None, "heading": r.true_track,
+            "progress": progress, "crew": r.crew or []
+        })
     return result
 
 @app.get("/crew/dashboard", tags=["Экипаж"])
 async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    # 1. История телеметрии
-    tele_res = db.execute(text("""
-        SELECT heart_rate, performance_score, record_timestamp 
-        FROM flight_telemetry 
-        WHERE crew_member_id = :u 
-        ORDER BY record_timestamp DESC LIMIT 20
-    """), {"u": user.user_id}).fetchall()
-    history = [{"heart_rate": r[0], "performance_score": r[1], "record_timestamp": str(r[2])} for r in tele_res]
+    tele_res = db.execute(text("SELECT heart_rate, performance_score, record_timestamp FROM flight_telemetry WHERE crew_member_id = :u ORDER BY record_timestamp DESC LIMIT 20"), {"u": user.user_id}).fetchall()
+    history = [{"heart_rate": r.heart_rate, "performance_score": r.performance_score, "record_timestamp": str(r.record_timestamp)} for r in tele_res]
 
-    # 2. Последний ИИ-расчет
-    last_log = db.query(models.PerformanceLog).filter(
-        models.PerformanceLog.crew_member_id == user.user_id
-    ).order_by(models.PerformanceLog.calculation_timestamp.desc()).first()
-
-    # 3. Ближайший рейс
-    flight_res = db.execute(text("""
-        SELECT f.flight_number, f.departure_airport, f.arrival_airport
-        FROM flights f
-        JOIN flight_assignments fa ON f.flight_id = fa.flight_id
-        WHERE fa.crew_member_id = :u 
-        AND f.status IN ('Запланирован', 'Задержан', 'В полёте')
-        ORDER BY f.scheduled_departure ASC LIMIT 1
-    """), {"u": user.user_id}).fetchone()
+    last_log = db.query(models.PerformanceLog).filter(models.PerformanceLog.crew_member_id == user.user_id).order_by(models.PerformanceLog.calculation_timestamp.desc()).first()
+    flight_res = db.execute(text("SELECT f.flight_number, f.departure_airport, f.arrival_airport FROM flights f JOIN flight_assignments fa ON f.flight_id = fa.flight_id WHERE fa.crew_member_id = :u AND f.status IN ('Запланирован', 'Задержан', 'В полёте') ORDER BY f.scheduled_departure ASC LIMIT 1"), {"u": user.user_id}).fetchone()
 
     current_score = last_log.performance_score if last_log else 0
     if history: current_score = history[0]["performance_score"]
@@ -273,79 +224,12 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
         "score": round(current_score),
         "status": last_log.performance_level if last_log else "Нет данных",
         "текущий_рейс": {
-            "flight_number": flight_res[0],
-            "departure_airport": flight_res[1],
-            "arrival_airport": flight_res[2]
+            "flight_number": flight_res[0], "departure_airport": flight_res[1], "arrival_airport": flight_res[2]
         } if flight_res else None,
         "telemetry_history": history
     }
 
 @app.get("/crew/my-flights", tags=["Экипаж"])
 async def get_my_flights(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    result = db.execute(text("""
-        SELECT f.flight_number, f.departure_airport, f.arrival_airport, 
-               f.scheduled_departure, f.scheduled_arrival, fa.role_on_board
-        FROM flights f
-        JOIN flight_assignments fa ON f.flight_id = fa.flight_id
-        WHERE fa.crew_member_id = :u
-        ORDER BY f.scheduled_departure ASC LIMIT 50
-    """), {"u": user.user_id}).fetchall()
-    
-    return [
-        {
-            "number": r[0], "from": r[1], "to": r[2], 
-            "dep": r[3].strftime("%d.%m %H:%M"), "arr": r[4].strftime("%d.%m %H:%M"),
-            "role": r[5]
-        } for r in result
-    ]
-
-@app.get("/history", tags=["Экипаж"])
-async def get_history(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    logs = db.execute(text("""
-        SELECT calculation_timestamp, performance_score, performance_level 
-        FROM performance_analytics_log 
-        WHERE crew_member_id = :u 
-        ORDER BY calculation_timestamp DESC LIMIT 50
-    """), {"u": user.user_id}).fetchall()
-    
-    return [
-        {
-            "calculation_timestamp": r[0].isoformat() if r[0] else None, 
-            "performance_score": r[1], 
-            "performance_level": r[2]
-        } for r in logs
-    ]
-
-@app.get("/dispatcher/monitor", tags=["Диспетчер"])
-def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
-    now = datetime.now(timezone.utc)
-    active_flights = db.execute(text("""
-        SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
-               to_char(f.scheduled_departure at time zone 'Europe/Moscow', 'HH24:MI') as time_dep,
-               to_char(f.scheduled_arrival at time zone 'Europe/Moscow', 'HH24:MI') as time_arr,
-               f.status, COALESCE(f.delay_minutes, 0) as delay,
-               to_char(COALESCE(f.actual_departure, f.scheduled_departure) at time zone 'Europe/Moscow', 'HH24:MI') as actual_dep,
-               f.current_lat, f.current_lon, f.true_track,
-               (SELECT json_agg(json_build_object(
-                    'uid', u.user_id, 
-                    'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
-                    'role', fa.role_on_board,
-                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
-                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
-                    'spo2', COALESCE((SELECT spo2 FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 98),
-                    'bp', COALESCE((SELECT blood_pressure FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), '120/80'),
-                    'temp', COALESCE((SELECT temperature FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 36.6),
-                    'stress', COALESCE((SELECT stress_level FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
-                    'history', (SELECT json_agg(json_build_object('hr', heart_rate, 'score', performance_score)) FROM (SELECT heart_rate, performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 20) as hist)
-                )) FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
-               ) as crew_list
-        FROM flights f
-        WHERE f.status IN ('В полёте', 'Задержан') OR (f.scheduled_departure <= :limit AND f.scheduled_departure >= :now)
-        ORDER BY f.scheduled_departure ASC
-    """), {"now": now, "limit": now + timedelta(hours=2)}).fetchall()
-
-    return [{
-        "id": str(r[0]), "number": r[1], "dep": r[2], "arr": r[3], "tail": r[4] or "Резерв", 
-        "time_dep": r[5], "time_arr": r[6], "status": r[7], "delay": r[8], "actual_dep": r[9],
-        "lat": float(r[10]) if r[10] else None, "lon": float(r[11]) if r[11] else None, "heading": r[12], "crew": r[13] or[]
-    } for r in active_flights]
+    result = db.execute(text("SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.scheduled_departure, f.scheduled_arrival, fa.role_on_board FROM flights f JOIN flight_assignments fa ON f.flight_id = fa.flight_id WHERE fa.crew_member_id = :u ORDER BY f.scheduled_departure ASC LIMIT 50"), {"u": user.user_id}).fetchall()
+    return [{"number": r.flight_number, "from": r.departure_airport, "to": r.arrival_airport, "dep": r.scheduled_departure.strftime("%d.%m %H:%M"), "arr": r.scheduled_arrival.strftime("%d.%m %H:%M"), "role": r.role_on_board} for r in result]
