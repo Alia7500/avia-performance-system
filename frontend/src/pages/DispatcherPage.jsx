@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api/config';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
-import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianGrid } from 'recharts';
+import { AreaChart, Area, ResponsiveContainer, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { 
   Plane, LayoutDashboard, LogOut, Sun, Moon, AlertTriangle, 
-  Users, Heart, ShieldAlert, Map, ChevronDown, ChevronUp, Info, Clock, Navigation, Activity
+  Users, Heart, ShieldAlert, Map, ChevronDown, ChevronUp, Clock
 } from 'lucide-react';
 
 delete L.Icon.Default.prototype._getIconUrl;
