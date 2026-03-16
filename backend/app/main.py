@@ -359,34 +359,40 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
 
 @app.get("/dispatcher/report", tags=["Диспетчер"])
 def get_dispatcher_report(db: Session = Depends(database.get_db)):
-    """Генерация сводных данных для PDF отчета"""
+    """Генерация данных для PDF-отчета (только ЗАВЕРШЕННЫЕ рейсы за сутки)"""
     now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
     
-    # Собираем данные за последние 24 часа
-    stats = db.execute(text("""
-        SELECT 
-            COUNT(DISTINCT f.flight_id) as total_flights,
-            AVG(ft.performance_score) as avg_fleet_score,
-            COUNT(DISTINCT CASE WHEN ft.performance_score < 70 THEN ft.crew_member_id END) as risk_personnel
+    # Ищем только ЗАВЕРШЕННЫЕ рейсы за последние 24 часа
+    finished_flights = db.execute(text("""
+        SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
+               (SELECT AVG(performance_score) FROM flight_telemetry WHERE flight_id = f.flight_id) as avg_score
         FROM flights f
-        LEFT JOIN flight_telemetry ft ON f.flight_id = ft.flight_id
-        WHERE f.scheduled_departure >= :day_ago AND f.scheduled_departure <= :now
-    """), {"day_ago": now - timedelta(days=1), "now": now}).fetchone()
+        WHERE f.status = 'Завершён' 
+        AND f.scheduled_arrival BETWEEN :day_ago AND :now
+        ORDER BY f.scheduled_arrival DESC
+    """), {"now": now, "day_ago": day_ago}).fetchall()
 
-    # Простая ИИ-генерация текста отчета
-    avg_score = round(stats[1] or 0)
-    risks = stats[2] or 0
+    report_data = []
+    total_score = 0
+    risk_count = 0
     
-    ai_comment = f"Анализ ИИ: За последние 24 часа средний индекс работоспособности летного состава составил {avg_score}%. "
-    if risks == 0:
-        ai_comment += "Состояние флота стабильно. Аномалий и отклонений от Приказа №139 не выявлено. Экипажи готовы к выполнению полетных заданий."
-    else:
-        ai_comment += f"ВНИМАНИЕ: Выявлено {risks} сотрудников в зоне физиологического риска (ЧСС выше нормы / высокий стресс). Рекомендуется усилить предполетный медицинский контроль (ВЛЭК)."
+    for r in finished_flights:
+        score = round(r[4] or 0)
+        total_score += score
+        if score > 0 and score < 70:
+            risk_count += 1
+            
+        report_data.append({
+            "flight": r[0], "dep": r[1], "arr": r[2], "tail": r[3], "score": score
+        })
+        
+    avg_fleet = round(total_score / len(finished_flights)) if finished_flights else 0
 
     return {
-        "report_date": now.strftime("%d.%m.%Y %H:%M"),
-        "total_flights": stats[0] or 0,
-        "avg_fleet_score": avg_score,
-        "risk_personnel": risks,
-        "ai_summary": ai_comment
+        "report_date": now.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M"),
+        "total_flights": len(finished_flights),
+        "avg_fleet_score": avg_fleet,
+        "risk_flights": risk_count,
+        "flights": report_data
     }
