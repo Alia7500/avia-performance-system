@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app import models, database
 from app.core import security
 from app.ai.analytics import analyze_crew_health
+from fastapi import Query
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -358,20 +359,33 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     } for r in active_flights]
 
 @app.get("/dispatcher/report", tags=["Диспетчер"])
-def get_dispatcher_report(db: Session = Depends(database.get_db)):
-    """Генерация данных для PDF-отчета (только ЗАВЕРШЕННЫЕ рейсы за сутки)"""
+@app.get("/dispatcher/report", tags=["Диспетчер"])
+def get_dispatcher_report(
+    db: Session = Depends(database.get_db),
+    start_date: str = Query(None),
+    end_date: str = Query(None)
+):
+    """Генерация данных для PDF-отчета за выбранный период"""
     now = datetime.now(timezone.utc)
-    day_ago = now - timedelta(days=1)
     
-    # Ищем только ЗАВЕРШЕННЫЕ рейсы за последние 24 часа
+    # Если даты не переданы, берем последние 24 часа по умолчанию
+    if not start_date or not end_date:
+        d_start = now - timedelta(days=1)
+        d_end = now
+    else:
+        # Парсим даты с фронтенда (формат YYYY-MM-DDTHH:MM)
+        d_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        d_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+    
+    # Ищем ЗАВЕРШЕННЫЕ рейсы за выбранный период
     finished_flights = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
                (SELECT AVG(performance_score) FROM flight_telemetry WHERE flight_id = f.flight_id) as avg_score
         FROM flights f
         WHERE f.status = 'Завершён' 
-        AND f.scheduled_arrival BETWEEN :day_ago AND :now
+        AND f.scheduled_arrival BETWEEN :start AND :end
         ORDER BY f.scheduled_arrival DESC
-    """), {"now": now, "day_ago": day_ago}).fetchall()
+    """), {"start": d_start, "end": d_end}).fetchall()
 
     report_data = []
     total_score = 0
@@ -389,10 +403,18 @@ def get_dispatcher_report(db: Session = Depends(database.get_db)):
         
     avg_fleet = round(total_score / len(finished_flights)) if finished_flights else 0
 
+    ai_comment = f"Анализ ИИ: За выбранный период ({d_start.strftime('%d.%m.%Y')} - {d_end.strftime('%d.%m.%Y')}) средний индекс работоспособности летного состава составил {avg_fleet}%. "
+    if risk_count == 0:
+        ai_comment += "Состояние флота стабильно. Экипажи выполняли полетные задания в штатном режиме."
+    else:
+        ai_comment += f"ВНИМАНИЕ: Выявлено {risk_count} рейсов, где экипаж находился в зоне риска (ЧСС выше нормы). Требуется анализ медицинских карт сотрудников."
+
     return {
         "report_date": now.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M"),
+        "period": f"{d_start.strftime('%d.%m.%Y %H:%M')} — {d_end.strftime('%d.%m.%Y %H:%M')}",
         "total_flights": len(finished_flights),
         "avg_fleet_score": avg_fleet,
         "risk_flights": risk_count,
-        "flights": report_data
+        "flights": report_data,
+        "ai_summary": ai_comment
     }
