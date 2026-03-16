@@ -325,13 +325,22 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
                to_char(f.scheduled_departure at time zone 'Europe/Moscow', 'HH24:MI') as time_dep,
                to_char(f.scheduled_arrival at time zone 'Europe/Moscow', 'HH24:MI') as time_arr,
-               f.status, COALESCE(f.delay_minutes, 0) as delay, f.current_lat, f.current_lon, f.true_track,
-               (SELECT json_agg(json_build_object('fio', u.last_name, 'role', fa.role_on_board, 'score', 85, 'hr', 70))
-                FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id) as crew
+               f.status, COALESCE(f.delay_minutes, 0) as delay,
+               to_char(COALESCE(f.actual_departure, f.scheduled_departure) at time zone 'Europe/Moscow', 'HH24:MI') as actual_dep,
+               f.current_lat, f.current_lon, f.true_track,
+               (SELECT json_agg(json_build_object(
+                    'uid', u.user_id, 'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
+                    'role', fa.role_on_board,
+                    'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0)
+                )) FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
+               ) as crew_list
         FROM flights f
-        WHERE f.status IN ('В полёте', 'Задержан')
-    """)).fetchall()
-
+        -- 🔥 ДОБАВИЛИ 'Запланирован' В СПИСОК СТАТУСОВ
+        WHERE f.status IN ('В полёте', 'Задержан', 'Запланирован') 
+        ORDER BY f.scheduled_departure ASC LIMIT 50
+    """), {}).fetchall()
+    
     result = []
     for r in active_flights:
         # Читаем историю полета из JSON-файла
