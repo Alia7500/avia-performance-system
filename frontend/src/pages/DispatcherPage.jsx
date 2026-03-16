@@ -74,7 +74,7 @@ const getAiVerdict = (score, stress, hr) => {
 // --- ГЛАВНЫЙ КОМПОНЕНТ ---
 const DispatcherPage = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('monitor');
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
   const [monitorData, setMonitorData] = useState([]);
   const [expandedFlight, setExpandedFlight] = useState(null);
   const [selectedMember, setSelectedMember] = useState(null);
@@ -228,20 +228,37 @@ const DispatcherPage = ({ user, onLogout }) => {
           {/* --- ВКЛАДКА: МОНИТОРИНГ --- */}
           {activeTab === 'monitor' && (
             <div className="space-y-8 animate-in fade-in duration-500">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border-l-4 border-blue-500 shadow-sm flex justify-between items-center">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* В воздухе */}
+                <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-blue-500 shadow-sm flex justify-between items-center transition-colors">
                   <div>
-                    <p className="text-slate-400 text-xs font-black uppercase tracking-widest mb-1">Бортов в небе</p>
-                    <h4 className="text-6xl font-black text-slate-800 dark:text-white">{monitorData.length}</h4>
+                    <p className="text-slate-400 text-xs font-black uppercase tracking-widest mb-1">Бортов в воздухе</p>
+                    <h4 className="text-5xl font-black text-slate-800 dark:text-white">
+                       {monitorData.filter(f => f.status === 'В полёте').length}
+                    </h4>
                   </div>
-                  <div className="w-20 h-20 bg-blue-50 dark:bg-slate-700 rounded-2xl flex items-center justify-center text-blue-600"><Plane size={40} /></div>
+                  <div className="w-16 h-16 bg-blue-50 dark:bg-slate-700/50 rounded-2xl flex items-center justify-center text-blue-600"><Plane size={32} /></div>
                 </div>
-                <div className={`p-8 rounded-[2rem] border-l-4 shadow-xl flex justify-between items-center transition-colors ${riskFlightsCount > 0 ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-500' : 'bg-white dark:bg-slate-800 border-emerald-500'}`}>
+
+                {/* Готовятся к вылету */}
+                <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-amber-400 shadow-sm flex justify-between items-center transition-colors">
+                  <div>
+                    <p className="text-slate-400 text-xs font-black uppercase tracking-widest mb-1">Готовятся к вылету</p>
+                    <h4 className="text-5xl font-black text-slate-800 dark:text-white">
+                       {monitorData.filter(f => f.status === 'Запланирован' || f.status === 'Задержан').length}
+                    </h4>
+                  </div>
+                  <div className="w-16 h-16 bg-amber-50 dark:bg-slate-700/50 rounded-2xl flex items-center justify-center text-amber-500"><Clock size={32} /></div>
+                </div>
+                
+                {/* Зона риска */}
+                <div className={`p-6 rounded-[2rem] border-b-4 shadow-sm flex justify-between items-center transition-colors ${riskFlightsCount > 0 ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-500' : 'bg-white dark:bg-slate-800 border-emerald-500'}`}>
                   <div>
                     <p className={`text-xs font-black uppercase tracking-widest mb-1 flex items-center gap-2 ${riskFlightsCount > 0 ? 'text-rose-600' : 'text-slate-400'}`}><AlertTriangle size={16}/> Зона риска (Экипаж)</p>
-                    <h4 className={`text-6xl font-black ${riskFlightsCount > 0 ? 'text-rose-600' : 'text-slate-800 dark:text-white'}`}>{riskFlightsCount} БОРТА</h4>
+                    <h4 className={`text-5xl font-black ${riskFlightsCount > 0 ? 'text-rose-600' : 'text-slate-800 dark:text-white'}`}>{riskFlightsCount} БОРТА</h4>
                   </div>
-                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center ${riskFlightsCount > 0 ? 'bg-rose-100 dark:bg-rose-900/50 text-rose-600' : 'bg-slate-50 dark:bg-slate-700 text-slate-400'}`}><ShieldAlert size={40} /></div>
+                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${riskFlightsCount > 0 ? 'bg-rose-100 dark:bg-rose-900/50 text-rose-600' : 'bg-slate-50 dark:bg-slate-700/50 text-slate-400'}`}><ShieldAlert size={32} /></div>
                 </div>
               </div>
 
@@ -422,15 +439,28 @@ const DispatcherPage = ({ user, onLogout }) => {
                           {/* Линия рисуется, только если есть ОБА аэропорта */}
                           {depCoords && arrCoords && <Polyline positions={[depCoords, arrCoords]} color={hasRisk ? "#f43f5e" : "#3b82f6"} weight={3} opacity={0.5} dashArray="8, 8" />}
                           
+                          {f.path_history && f.path_history.length > 1 && (
+                              <Polyline 
+                                positions={f.path_history} 
+                                color="#f59e0b" 
+                                weight={4} 
+                                opacity={0.8} 
+                              />
+                          )}
+                          
+                          {/* Иконка самолета */}
                           {f.lat && f.lon && (
-                            <Marker position={[f.lat, f.lon]} icon={createPlaneIcon(f.heading, hasRisk)}>
-                              <Popup>
-                                <div className="text-center font-sans p-2">
-                                  <b className="text-blue-600 text-xl block mb-1">{f.number || f.flight}</b>
-                                  <span className="font-black text-slate-500 uppercase text-[10px] bg-slate-100 px-2 py-1 rounded">{f.dep} ➔ {f.arr}</span>
-                                </div>
-                              </Popup>
-                            </Marker>
+                              <Marker 
+                                position={[f.lat, f.lon]} 
+                                icon={createPlaneIcon(f.heading, false)}
+                              >
+                                <Popup>
+                                  <div className="text-center">
+                                      <b className="block text-blue-600">{f.number}</b>
+                                      <span className="text-xs">{f.dep} ➔ {f.arr}</span>
+                                  </div>
+                                </Popup>
+                              </Marker>
                           )}
                         </React.Fragment>
                       );
