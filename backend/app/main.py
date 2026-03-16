@@ -3,7 +3,6 @@ import uuid
 import random
 import logging
 import requests
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -86,28 +85,29 @@ def update_flight_statuses():
     finally: db.close()
 
 def sync_flightradar():
-    db = next(database.get_db())
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    """Каждую минуту берем реальные координаты Аэрофлота с FlightRadar24"""
     try:
+        db = next(database.get_db())
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         res = requests.get("https://data-cloud.flightradar24.com/zones/fcgi/data.json?airline=AFL", headers=headers, timeout=10)
+        
         if res.status_code == 200:
             data = res.json()
             for key, val in data.items():
-                if key in ['full_count', 'version', 'stats'] or len(val) < 14: continue
-                lat, lon, hdg, fnum = val[1], val[2], val[3], val[13]
+                if key in['full_count', 'version', 'stats']: continue
+                lat, lon, heading, flight_num = val[1], val[2], val[3], val[13]
                 
-                # Пишем координаты в JSON-файл рейса
-                filepath = f"backend/flights_data/{fnum}.json"
-                history = []
-                if os.path.exists(filepath):
-                    with open(filepath, 'r') as f: history = json.load(f)
-                
-                history.append({"lat": lat, "lon": lon, "time": datetime.now().isoformat()})
-                
-                with open(filepath, 'w') as f: json.dump(history, f)
-        db.commit()
-    except Exception as e: logger.error(e)
-    finally: db.close()
+                if flight_num:
+                    db.execute(text("""
+                        UPDATE flights 
+                        SET current_lat = :lat, current_lon = :lon, true_track = :hdg
+                        WHERE flight_number = :fnum AND status = 'В полёте'
+                    """), {"lat": lat, "lon": lon, "hdg": heading, "fnum": flight_num})
+            db.commit()
+    except Exception as e:
+        logger.error(f"Ошибка FlightRadar: {e}")
+    finally:
+        db.close()
 
 def simulate_flight_telemetry():
     """Генерация полной биометрии: Пульс, SpO2, Давление, Температура, Стресс"""
@@ -321,6 +321,7 @@ async def get_history(user: Annotated[models.User, Depends(get_current_user)], d
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
 def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
+    # БЭКЕНД САМ СЧИТАЕТ ПРОГРЕСС ПОЛЕТА (никаких багов с часовыми поясами!)
     active_flights = db.execute(text("""
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
                to_char(f.scheduled_departure at time zone 'Europe/Moscow', 'HH24:MI') as time_dep,
@@ -350,24 +351,12 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
         ORDER BY f.scheduled_departure ASC
     """), {"now": now, "limit": now + timedelta(hours=2)}).fetchall()
 
-    result = []
-    for r in active_flights:
-        # Читаем историю полета из JSON-файла
-        path_history = []
-        filepath = f"app/flights_data/{r.flight_number}.json"
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r') as f: path_history = json.load(f)
-            except: pass
-
-        result.append({
-            "id": str(r[0]), "number": r[1], "dep": r[2], "arr": r[3], "tail": r[4],
-            "time_dep": r[5], "time_arr": r[6], "status": r[7], "delay": r[8],
-            "lat": float(r[9]) if r[9] else None, "lon": float(r[10]) if r[10] else None, 
-            "heading": r[11], "crew": r[12] or [],
-            "path_history": [[p['lat'], p['lon']] for p in path_history]
-        })
-    return result
+    return [{
+        "id": str(r[0]), "number": r[1], "dep": r[2], "arr": r[3], "tail": r[4] or "Резерв", 
+        "time_dep": r[5], "time_arr": r[6], "status": r[7], "delay": r[8], "actual_dep": r[9],
+        "lat": float(r[10]) if r[10] else None, "lon": float(r[11]) if r[11] else None, "heading": r[12],
+        "progress": int(r[13]), "crew": r[14] or[]
+    } for r in active_flights]
 
 @app.get("/dispatcher/report", tags=["Диспетчер"])
 @app.get("/dispatcher/report", tags=["Диспетчер"])
