@@ -328,19 +328,28 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
                f.status, COALESCE(f.delay_minutes, 0) as delay,
                to_char(COALESCE(f.actual_departure, f.scheduled_departure) at time zone 'Europe/Moscow', 'HH24:MI') as actual_dep,
                f.current_lat, f.current_lon, f.true_track,
+               
+               -- Точный процент пути
+               GREATEST(0, LEAST(100, ROUND(CAST(
+                   EXTRACT(EPOCH FROM (:now - (f.scheduled_departure + COALESCE(f.delay_minutes, 0) * interval '1 minute'))) / 
+                   NULLIF(EXTRACT(EPOCH FROM (f.scheduled_arrival - f.scheduled_departure)), 0) * 100 
+               AS NUMERIC), 0))) as progress,
+               
                (SELECT json_agg(json_build_object(
-                    'uid', u.user_id, 'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 
-                    'role', fa.role_on_board,
+                    'uid', u.user_id, 'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 'role', fa.role_on_board,
                     'score', COALESCE((SELECT performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
-                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0)
+                    'hr', COALESCE((SELECT heart_rate FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
+                    'spo2', COALESCE((SELECT spo2 FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 98),
+                    'bp', COALESCE((SELECT blood_pressure FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), '120/80'),
+                    'temp', COALESCE((SELECT temperature FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 36.6),
+                    'history', (SELECT json_agg(json_build_object('hr', heart_rate, 'score', performance_score)) FROM (SELECT heart_rate, performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 20) as hist)
                 )) FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
                ) as crew_list
         FROM flights f
-        -- 🔥 ДОБАВИЛИ 'Запланирован' В СПИСОК СТАТУСОВ
-        WHERE f.status IN ('В полёте', 'Задержан', 'Запланирован') 
-        ORDER BY f.scheduled_departure ASC LIMIT 50
-    """), {}).fetchall()
-    
+        WHERE f.status IN ('В полёте', 'Задержан') OR (f.scheduled_departure <= :limit AND f.scheduled_departure >= :now)
+        ORDER BY f.scheduled_departure ASC
+    """), {"now": now, "limit": now + timedelta(hours=2)}).fetchall()
+
     result = []
     for r in active_flights:
         # Читаем историю полета из JSON-файла
