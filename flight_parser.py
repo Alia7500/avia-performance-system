@@ -246,9 +246,17 @@ def sync_single_destination(dest_code, dest_name, date_from, date_to, tails, air
         # СОХРАНЯЕМ В БАЗУ
         try:
             with engine.begin() as conn:
+                # 🔥 ИСПРАВЛЕНИЕ: удаляем рейсы по ОБЕИМ направлениям
                 conn.execute(text("""
                     DELETE FROM flights 
-                    WHERE departure_airport = :dep AND arrival_airport = :arr     AND status = 'Запланирован'"""), {"dep": "SVO", "arr": dest_code}) # Или наоборот, в зависимости от направления
+                    WHERE status = 'Запланирован'
+                      AND (
+                          (departure_airport = :dep AND arrival_airport = :arr)
+                          OR
+                          (departure_airport = :arr AND arrival_airport = :dep)
+                      )
+                """), {"dep": "SVO", "arr": dest_code})
+                
                 conn.execute(text("""
                     INSERT INTO flights (
                         flight_number, departure_airport, arrival_airport,
@@ -262,7 +270,7 @@ def sync_single_destination(dest_code, dest_name, date_from, date_to, tails, air
                         status = EXCLUDED.status
                 """), {
                     "num": flight["flight_number"],
-                    "dep": flight["departure_airport"],
+                    "dep": flight["departure_airport"],  # ← уже правильно определено в extract_flight_info
                     "arr": flight["arrival_airport"],
                     "s_dep": flight["scheduled_departure"],
                     "s_arr": flight["scheduled_arrival"],
@@ -270,11 +278,12 @@ def sync_single_destination(dest_code, dest_name, date_from, date_to, tails, air
                     "status": flight["status"]
                 })
                 inserted += 1
-                print(f"   ✅ {flight['flight_number']} ({flight['departure_airport']}->{flight['arrival_airport']}) → {assigned_tail}", end='\r')
+                print(f"   ✅ {flight['flight_number']} ({flight['departure_airport']}→{flight['arrival_airport']}) → {assigned_tail}", end='\r')
         except Exception as e:
             errors += 1
-
-    return inserted, errors
+            print(f"   ❌ Ошибка записи {flight.get('flight_number', 'N/A')}: {e}")
+        
+            return inserted, errors
 
 def main():
     """Главная функция с исправленной логикой выбора и диспетчеризации"""

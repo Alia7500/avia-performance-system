@@ -53,8 +53,14 @@ class Flight(Base):
     arrival_airport = Column(String, nullable=False)
     scheduled_departure = Column(DateTime(timezone=True), nullable=False)
     scheduled_arrival = Column(DateTime(timezone=True), nullable=False)
+    actual_departure = Column(DateTime(timezone=True), nullable=True)
+    actual_arrival = Column(DateTime(timezone=True), nullable=True)
     tail_number = Column(String, ForeignKey("aircrafts.tail_number"))
     status = Column(String, default="Запланирован")
+    delay_minutes = Column(Integer, default=0)
+    current_lat = Column(Float, nullable=True)  # Текущие GPS координаты
+    current_lon = Column(Float, nullable=True)
+    true_track = Column(Integer, nullable=True)  # Курс/направление
 
 # --- 6. НАЗНАЧЕНИЯ ЭКИПАЖА (РОСТЕР) ---
 class FlightAssignment(Base):
@@ -72,6 +78,8 @@ class FlightTelemetry(Base):
     crew_member_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
     heart_rate = Column(Integer)
     spo2 = Column(Integer)
+    blood_pressure = Column(String)  # "120/80"
+    temperature = Column(Float)      # 36.6
     stress_level = Column(Integer)
     performance_score = Column(Float) # Результат работы ИИ в небе
     record_timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -95,3 +103,14 @@ class MedicalCheck(Base):
     pulse_at_check = Column(Integer)
     is_admitted = Column(Boolean, default=True)
     check_time = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+# --- 10. АУДИТ ДЕЙСТВИЙ (ЛОГИРОВАНИЕ ДЕЙСТВИЙ АДМИНИСТРАТОРОВ И МЕДРАБОТНИКОВ) ---
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    audit_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action_type = Column(String)  # user_create, user_update, user_delete, upload_health, analysis_performed
+    performed_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    target_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    description = Column(String)
+    timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)
+    result = Column(String, default="success")  # success, error, warning

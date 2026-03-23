@@ -165,7 +165,7 @@ const DispatcherPage = ({ user, onLogout }) => {
              <Plane size={24} className="text-white" />
           </div>
           <div className="leading-none">
-            <span className="font-black text-xl tracking-tighter uppercase block">ЦУП АЭРОФЛОТ</span>
+            <span className="font-black text-xl tracking-tighter uppercase block">ЦУП </span>
             <span className="text-blue-600 dark:text-blue-400 font-bold text-[10px] tracking-[0.2em] uppercase">Контроль МС-21</span>
           </div>
         </div>
@@ -447,7 +447,7 @@ const DispatcherPage = ({ user, onLogout }) => {
                                 opacity={0.8} 
                               />
                           )}
-                          
+
                           {/* Иконка самолета */}
                           {f.lat && f.lon && (
                               <Marker 
