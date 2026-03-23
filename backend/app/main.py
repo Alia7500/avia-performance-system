@@ -753,3 +753,47 @@ def get_dispatcher_report(
         "flights": report_data,
         "ai_summary": ai_comment
     }
+    d_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+    d_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+    
+    # Ищем ЗАВЕРШЕННЫЕ рейсы за выбранный период
+    finished_flights = db.execute(text("""
+        SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
+               (SELECT AVG(performance_score) FROM flight_telemetry WHERE flight_id = f.flight_id) as avg_score
+        FROM flights f
+        WHERE f.status = 'Завершён' 
+        AND f.scheduled_arrival BETWEEN :start AND :end
+        ORDER BY f.scheduled_arrival DESC
+    """), {"start": d_start, "end": d_end}).fetchall()
+
+    report_data = []
+    total_score = 0
+    risk_count = 0
+    
+    for r in finished_flights:
+        score = round(r[4] or 0)
+        total_score += score
+        if score > 0 and score < 70:
+            risk_count += 1
+            
+        report_data.append({
+            "flight": r[0], "dep": r[1], "arr": r[2], "tail": r[3], "score": score
+        })
+        
+    avg_fleet = round(total_score / len(finished_flights)) if finished_flights else 0
+
+    ai_comment = f"Анализ ИИ: За выбранный период ({d_start.strftime('%d.%m.%Y')} - {d_end.strftime('%d.%m.%Y')}) средний индекс работоспособности летного состава составил {avg_fleet}%. "
+    if risk_count == 0:
+        ai_comment += "Состояние флота стабильно. Экипажи выполняли полетные задания в штатном режиме."
+    else:
+        ai_comment += f"ВНИМАНИЕ: Выявлено {risk_count} рейсов, где экипаж находился в зоне риска (ЧСС выше нормы). Требуется анализ медицинских карт сотрудников."
+
+    return {
+        "report_date": now.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M"),
+        "period": f"{d_start.strftime('%d.%m.%Y %H:%M')} — {d_end.strftime('%d.%m.%Y %H:%M')}",
+        "total_flights": len(finished_flights),
+        "avg_fleet_score": avg_fleet,
+        "risk_flights": risk_count,
+        "flights": report_data,
+        "ai_summary": ai_comment
+    }
