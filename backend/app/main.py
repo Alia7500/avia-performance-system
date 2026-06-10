@@ -32,6 +32,7 @@ app = FastAPI(title="Авиа-Агент МС-21: Центр Управлени�
 # CORS для фронтенда
 app.add_middleware(
     CORSMiddleware,
+    #allow_origins=["https://avia-evm-web-app-ru.ru"],
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
