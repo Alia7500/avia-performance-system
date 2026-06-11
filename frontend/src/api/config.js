@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const API_URL = "http://89.232.177.174";
+export const API_URL = "https://api.avia-evm-web-app-ru.ru";
 
 const api = axios.create({
     baseURL: API_URL,
