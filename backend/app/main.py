@@ -30,6 +30,11 @@ models.Base.metadata.create_all(bind=database.engine)
 app = FastAPI(title="Авиа-Агент МС-21: Центр Управления")
 
 # CORS для фронтенда
+origins = [
+    "https://avia-evm-web-app-ru.ru",
+    "https://www.avia-evm-web-app-ru.ru",
+    "http://localhost:3000", # Оставляем для локальных тестов
+]
 app.add_middleware(
     CORSMiddleware,
     #allow_origins=["https://avia-evm-web-app-ru.ru"],
