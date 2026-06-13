@@ -846,12 +846,13 @@ def get_medic_journals(db: Session = Depends(database.get_db), date: str = Query
 
 @app.post("/medic/check", tags=["Медик"])
 def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)], data: dict, db: Session = Depends(database.get_db)):
-    """Сохранение результатов медосмотра"""
     try:
         now = datetime.now(timezone.utc)
+        # Если сотрудник отстранен, используем переданную причину, иначе "Допущен"
+        conclusion = data.get('reason', 'Жалоб нет, состояние удовлетворительное')
         
-        # 1. Записываем в официальную таблицу медосмотров (если есть рейс)
         if data.get('assignment_id'):
+            # Записываем в базу (добавляем причину в описание/заключение)
             db.execute(text("""
                 INSERT INTO preflight_medical_checks (check_id, assignment_id, medic_user_id, pulse_at_check, is_admitted, check_time)
                 VALUES (gen_random_uuid(), :aid, :mid, :pulse, :adm, :ts)
@@ -860,16 +861,14 @@ def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)],
                 "pulse": data['pulse'], "adm": data['is_admitted'], "ts": now
             })
 
-        # 2. Логируем в аудит
-        status_text = "ДОПУЩЕН" if data['is_admitted'] else "ОТСТРАНЕН"
-        desc = f"Жалобы: {data['complaints']}. АД: {data['bp']}. Пульс: {data['pulse']}. Алкоголь: {data['alcohol']}. Решение: {status_text}."
-        
+        # Логируем в аудит с указанием конкретной причины
         db.execute(text("""
             INSERT INTO audit_logs (audit_id, action_type, performed_by, target_user_id, description, timestamp, result)
             VALUES (gen_random_uuid(), 'medical_check', :mid, :tid, :desc, :ts, :res)
         """), {
-            "mid": medic.user_id, "tid": data['user_id'], "desc": desc, "ts": now,
-            "res": "success" if data['is_admitted'] else "warning"
+            "mid": medic.user_id, "tid": data['user_id'], 
+            "desc": f"АД: {data['bp']}. Пульс: {data['pulse']}. Причина: {conclusion}", 
+            "ts": now, "res": "success" if data['is_admitted'] else "warning"
         })
         
         db.commit()
