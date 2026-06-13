@@ -233,11 +233,9 @@ async def admin_create_user(
     db: Session = Depends(database.get_db)
 ):
     try:
-        # 1. Находим UUID роли
         role_name = user_data.get('role_name', 'crew_member')
         role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": role_name}).fetchone()
         
-        # 2. Создаем основного пользователя
         hashed_pwd = security.get_password_hash(str(user_data['password']))
         new_user_id = uuid.uuid4()
         
@@ -252,26 +250,26 @@ async def admin_create_user(
             baseline_hr=int(user_data.get('baseline_hr', 75))
         )
         db.add(new_user)
-        db.flush() # Генерируем ID в сессии, но не закрываем транзакцию
+        db.flush()
 
-        # 3. ЕСЛИ ЭТО ЭКИПАЖ — ДОБАВЛЯЕМ ДОЛЖНОСТЬ В ТАБЛИЦУ flight_crew_members
+        # ЛОГИКА ДОЛЖНОСТЕЙ
+        position = None
         if role_name == 'crew_member':
             position = user_data.get('position', 'Бортпроводник')
+        elif role_name == 'medical_worker':
+            position = "Главный врач" if user_data.get('is_extended') else "Медработник"
+
+        if position:
             db.execute(text("""
-                INSERT INTO flight_crew_members (crew_member_id, user_id, position)
-                VALUES (:cm_id, :u_id, :pos)
-            """), {
-                "cm_id": uuid.uuid4(),
-                "u_id": new_user_id,
-                "pos": position
-            })
+                INSERT INTO flight_crew_members (user_id, position) 
+                VALUES (:uid, :pos)
+            """), {"uid": new_user_id, "pos": position})
 
         db.commit()
-        return {"status": "success", "message": "Аккаунт сотрудника создан"}
+        return {"status": "success"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-
 @app.get("/admin/staff", tags=["Администратор"])
 def get_all_staff(db: Session = Depends(database.get_db), role: str = Query(None), search: str = Query(None)):
     """Получить всех пользователей. Администраторы выводятся первыми!"""
@@ -291,60 +289,35 @@ def get_all_staff(db: Session = Depends(database.get_db), role: str = Query(None
     } for r in result]
 
 @app.put("/admin/update_user/{user_id}", tags=["Администратор"])
-async def update_user(
-    user_id: str, admin: Annotated[models.User, Depends(get_current_admin)],
-    user_data: dict, db: Session = Depends(database.get_db)
-):
+async def update_user(user_id: str, admin: Annotated[models.User, Depends(get_current_admin)], user_data: dict, db: Session = Depends(database.get_db)):
     user = db.query(models.User).filter(models.User.user_id == user_id).first()
     if not user: raise HTTPException(status_code=404, detail="Не найден")
-    
     try:
-        target_user_id = user.user_id
-        target_user_name = f"{user.last_name} {user.first_name}"
-        updated_fields = []
-
-        if 'first_name' in user_data:
-            user.first_name = user_data['first_name']
-            updated_fields.append('имя')
-        if 'last_name' in user_data:
-            user.last_name = user_data['last_name']
-            updated_fields.append('фамилия')
-        if 'patronymic' in user_data:
-            user.patronymic = user_data.get('patronymic', "")
-            updated_fields.append('отчество')
-        if 'email' in user_data:
-            user.email = user_data['email']
-            updated_fields.append('email')
-        if 'baseline_hr' in user_data:
-            user.baseline_hr = int(user_data['baseline_hr'])
-            updated_fields.append('норма ЧСС')
+        user.first_name = user_data.get('first_name', user.first_name)
+        user.last_name = user_data.get('last_name', user.last_name)
+        user.email = user_data.get('email', user.email)
+        user.baseline_hr = int(user_data.get('baseline_hr', user.baseline_hr))
         
         if 'role_name' in user_data:
             role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": user_data['role_name']}).fetchone()
-            if role_res:
-                user.role_id = role_res[0]
-                updated_fields.append('роль')
+            user.role_id = role_res[0]
+            
+            # Обновляем спец. должность
+            role_name = user_data['role_name']
+            position = None
+            if role_name == 'crew_member':
+                position = user_data.get('position')
+            elif role_name == 'medical_worker':
+                position = "Главный врач" if user_data.get('is_extended') else "Медработник"
 
-        if 'password' in user_data and str(user_data['password']).strip():
-            user.password_hash = security.get_password_hash(str(user_data['password']).strip())
-            updated_fields.append('пароль')
-
-        if user_data.get('role_name') == 'medical_worker':
-            pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
-            # ИСПРАВЛЕНО: Тоже убрана несуществующая колонка
-            db.execute(text("""
-                INSERT INTO flight_crew_members (user_id, position) 
-                VALUES (:uid, :pos) 
-                ON CONFLICT (user_id) DO UPDATE SET position = :pos
-            """), {"uid": user.user_id, "pos": pos})
-            updated_fields.append('медицинская должность')
-
+            if position:
+                db.execute(text("""
+                    INSERT INTO flight_crew_members (user_id, position) 
+                    VALUES (:uid, :pos) 
+                    ON CONFLICT (user_id) DO UPDATE SET position = :pos
+                """), {"uid": user_id, "pos": position})
+        
         db.commit()
-        log_action(
-            db, admin.user_id, "user_update",
-            f"Обновлены данные пользователя: {target_user_name}. Поля: {', '.join(updated_fields) if updated_fields else 'без изменений'}",
-            target_id=target_user_id
-        )
         return {"status": "success"}
     except Exception as e:
         db.rollback()
