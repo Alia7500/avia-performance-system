@@ -52,7 +52,7 @@ const AdminPage = ({ user, onLogout }) => {
           const res = await api.get('/admin/performance-trends');
           setTrends(res.data);
         } else if (activeTab === 'audit') {
-          const res = await api.get('/admin/medical-audit');
+          const res = await api.get('/admin/audit-logs');
           setAuditLogs(res.data);
         }
       } catch (error) {
@@ -337,16 +337,41 @@ const AdminPage = ({ user, onLogout }) => {
               <div className="bg-white dark:bg-slate-800 rounded-[2rem] shadow-xl overflow-hidden border border-slate-200 dark:border-slate-700">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                    <tr><th className="px-8 py-6">Дата и Время</th><th className="px-8 py-6">Сотрудник / Система</th><th className="px-8 py-6">Действие</th><th className="px-8 py-6">Событие</th><th className="px-8 py-6">Статус</th></tr>
+                    <tr>
+                      <th className="px-8 py-6">Время (UTC)</th>
+                      <th className="px-8 py-6">Инициатор</th>
+                      <th className="px-8 py-6">Действие</th>
+                      <th className="px-8 py-6">Объект / Описание</th>
+                      <th className="px-8 py-6">Результат</th>
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                     {auditLogs.map((log, i) => (
                       <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                        <td className="px-8 py-5 font-mono text-xs text-slate-500">{log.timestamp}</td>
-                        <td className="px-8 py-5 font-bold text-slate-700 dark:text-slate-300">{log.medical_worker_fio}</td>
-                        <td className="px-8 py-5"><span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase bg-purple-100 text-purple-700">{log.action_label}</span></td>
-                        <td className="px-8 py-5 text-sm text-slate-600 dark:text-slate-400">{log.description}</td>
-                        <td className="px-8 py-5"><span className="text-emerald-500 font-bold text-sm">✓ {log.result}</span></td>
+                        <td className="px-8 py-5 font-mono text-xs text-slate-500">
+                          {log.timestamp ? new Date(log.timestamp).toLocaleString('ru-RU') : '—'}
+                        </td>
+                        <td className="px-8 py-5 font-bold text-slate-700 dark:text-slate-200">
+                          {log.actor || 'Система'}
+                        </td>
+                        <td className="px-8 py-5">
+                          <span className={`px-2 py-1 rounded text-[9px] font-black uppercase border ${
+                            log.type === 'medical_check' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                            log.type === 'user_update' ? 'bg-blue-50 text-blue-600 border-blue-200' :
+                            'bg-slate-100 text-slate-500 border-slate-200'
+                          }`}>
+                            {log.type || 'audit'}
+                          </span>
+                        </td>
+                        <td className="px-8 py-5">
+                          <p className="text-sm font-medium">{log.desc || '—'}</p>
+                          {log.target && <p className="text-[10px] text-blue-500 font-bold mt-1">Объект: {log.target}</p>}
+                        </td>
+                        <td className="px-8 py-5">
+                          <span className={`flex items-center gap-2 font-bold text-sm ${log.result === 'success' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {log.result === 'success' ? 'УСПЕШНО' : 'ВНИМАНИЕ'}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

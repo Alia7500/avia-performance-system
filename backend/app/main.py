@@ -56,6 +56,60 @@ async def get_current_admin(current_user: Annotated[models.User, Depends(get_cur
 
 
 # ==========================================
+# 1.1. АУДИТ ДЕЙСТВИЙ
+# ==========================================
+
+def _normalize_uuid(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+def log_action(db: Session, user_id, action_type: str, description: str, result: str = "success", target_id=None):
+    """Единая запись событий в audit_logs. Ошибка аудита не ломает основной бизнес-процесс."""
+    performed_by = _normalize_uuid(user_id) or user_id
+    target_user_id = _normalize_uuid(target_id)
+    timestamp = datetime.now(timezone.utc)
+
+    try:
+        new_log = models.AuditLog(
+            audit_id=uuid.uuid4(),
+            action_type=action_type,
+            performed_by=performed_by,
+            target_user_id=target_user_id,
+            description=description,
+            timestamp=timestamp,
+            result=result
+        )
+        db.add(new_log)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка записи аудита через ORM: {e}")
+        try:
+            db.execute(text("""
+                INSERT INTO audit_logs (audit_id, action_type, performed_by, target_user_id, description, timestamp, result)
+                VALUES (:audit_id, :action_type, :performed_by, :target_user_id, :description, :timestamp, :result)
+            """), {
+                "audit_id": uuid.uuid4(),
+                "action_type": action_type,
+                "performed_by": performed_by,
+                "target_user_id": target_user_id,
+                "description": description,
+                "timestamp": timestamp,
+                "result": result
+            })
+            db.commit()
+        except Exception as sql_error:
+            db.rollback()
+            logger.error(f"Ошибка записи аудита: {sql_error}")
+
+
+# ==========================================
 # 2. ФОНОВЫЕ ПРОЦЕССЫ (СИМУЛЯЦИЯ, ЗАДЕРЖКИ И РАДАР)
 # ==========================================
 
@@ -202,7 +256,14 @@ async def admin_create_user(
                 ON CONFLICT (user_id) DO UPDATE SET position = :pos
             """), {"uid": new_user.user_id, "pos": pos})
 
+        created_user_id = new_user.user_id
+        created_user_name = f"{new_user.last_name} {new_user.first_name}"
         db.commit()
+        log_action(
+            db, admin.user_id, "user_create",
+            f"Создан пользователь: {created_user_name}. Роль: {role_name}",
+            target_id=created_user_id
+        )
         return {"status": "success"}
     except Exception as e:
         db.rollback()
@@ -235,18 +296,35 @@ async def update_user(
     if not user: raise HTTPException(status_code=404, detail="Не найден")
     
     try:
-        if 'first_name' in user_data: user.first_name = user_data['first_name']
-        if 'last_name' in user_data: user.last_name = user_data['last_name']
-        if 'patronymic' in user_data: user.patronymic = user_data.get('patronymic', "")
-        if 'email' in user_data: user.email = user_data['email']
-        if 'baseline_hr' in user_data: user.baseline_hr = int(user_data['baseline_hr'])
+        target_user_id = user.user_id
+        target_user_name = f"{user.last_name} {user.first_name}"
+        updated_fields = []
+
+        if 'first_name' in user_data:
+            user.first_name = user_data['first_name']
+            updated_fields.append('имя')
+        if 'last_name' in user_data:
+            user.last_name = user_data['last_name']
+            updated_fields.append('фамилия')
+        if 'patronymic' in user_data:
+            user.patronymic = user_data.get('patronymic', "")
+            updated_fields.append('отчество')
+        if 'email' in user_data:
+            user.email = user_data['email']
+            updated_fields.append('email')
+        if 'baseline_hr' in user_data:
+            user.baseline_hr = int(user_data['baseline_hr'])
+            updated_fields.append('норма ЧСС')
         
         if 'role_name' in user_data:
             role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": user_data['role_name']}).fetchone()
-            if role_res: user.role_id = role_res[0]
+            if role_res:
+                user.role_id = role_res[0]
+                updated_fields.append('роль')
 
         if 'password' in user_data and str(user_data['password']).strip():
             user.password_hash = security.get_password_hash(str(user_data['password']).strip())
+            updated_fields.append('пароль')
 
         if user_data.get('role_name') == 'medical_worker':
             pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
@@ -256,8 +334,14 @@ async def update_user(
                 VALUES (:uid, :pos) 
                 ON CONFLICT (user_id) DO UPDATE SET position = :pos
             """), {"uid": user.user_id, "pos": pos})
+            updated_fields.append('медицинская должность')
 
         db.commit()
+        log_action(
+            db, admin.user_id, "user_update",
+            f"Обновлены данные пользователя: {target_user_name}. Поля: {', '.join(updated_fields) if updated_fields else 'без изменений'}",
+            target_id=target_user_id
+        )
         return {"status": "success"}
     except Exception as e:
         db.rollback()
@@ -269,7 +353,7 @@ async def delete_user(
     admin: Annotated[models.User, Depends(get_current_admin)],
     db: Session = Depends(database.get_db)
 ):
-    """Мягкое удаление пользователя (мягкое - хранится в БД с флагом)"""
+    """Удаление пользователя с записью события в аудит."""
     user = db.query(models.User).filter(models.User.user_id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -278,24 +362,22 @@ async def delete_user(
     if user_id == str(admin.user_id):
         raise HTTPException(status_code=403, detail="Нельзя удалить свой аккаунт")
     
-    # Мягкое удаление (можно добавить поле is_active)
-    db.delete(user)
-    
-    # Логируем в аудит
+    deleted_user_name = f"{user.last_name} {user.first_name}"
+    deleted_user_id = str(user.user_id)
     try:
-        audit_log = models.AuditLog(
-            action_type='user_delete',
-            performed_by=str(admin.user_id),
-            target_user_id=user_id,
-            description=f"Удален пользователь: {user.last_name} {user.first_name}",
-            timestamp=datetime.now(timezone.utc)
+        db.delete(user)
+        db.commit()
+
+        # После удаления target_id намеренно не ставим, чтобы запись аудита не зависела от удаленной FK-записи.
+        log_action(
+            db, admin.user_id, "user_delete",
+            f"Удален пользователь: {deleted_user_name} ({deleted_user_id})",
+            result="warning"
         )
-        db.add(audit_log)
-    except:
-        pass
-    
-    db.commit()
-    return {"status": "успех", "message": "Пользователь удален"}
+        return {"status": "успех", "message": "Пользователь удален"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/crew/upload-health", tags=["Экипаж"])
 async def upload_health(
@@ -307,6 +389,7 @@ async def upload_health(
     result = analyze_crew_health(content, user.baseline_hr)
     
     if "error" in result:
+        log_action(db, user.user_id, "health_upload", f"Ошибка загрузки health-данных: {result['error']}", result="error", target_id=user.user_id)
         raise HTTPException(status_code=400, detail=result["error"])
 
     try:
@@ -319,6 +402,11 @@ async def upload_health(
         )
         db.add(new_log)
         db.commit()
+        log_action(
+            db, user.user_id, "health_upload",
+            f"Загружены health-данные. Индекс готовности: {round(result['readiness_score'] * 100)}%. Статус: {result['status']}",
+            target_id=user.user_id
+        )
     except Exception as e:
         db.rollback()
         logger.error(f"Ошибка сохранения лога: {e}")
@@ -500,6 +588,8 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
         crew_list = []
         total_perf = 0
         processed = 0
+        at_risk_count = 0
+        critical_count = 0
 
         for r in result:
             avg_perf = float(r[6]) if r[6] is not None else 0
@@ -514,6 +604,10 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
             total_perf += avg_perf
             processed += 1
             status = "⚠️ Критический" if avg_perf < 60 else "⚠️ Риск" if avg_perf < 75 else "Оптимальный"
+            if avg_perf < 60:
+                critical_count += 1
+            elif avg_perf < 75:
+                at_risk_count += 1
             
             crew_list.append({
                 "fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": r[5],
@@ -523,10 +617,24 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
             })
 
         avg_fleet = round(total_perf / processed) if processed > 0 else 0
-        return {
-            "summary": {"total_crew": len(crew_list), "avg_performance": avg_fleet, "at_risk_count": 0, "critical_count": 0, "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"},
-            "crew_list": crew_list, "ai_comment": "Анализ завершен успешно. Все системы работают в штатном режиме."
+        response_data = {
+            "summary": {
+                "total_crew": len(crew_list),
+                "avg_performance": avg_fleet,
+                "at_risk_count": at_risk_count,
+                "critical_count": critical_count,
+                "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"
+            },
+            "crew_list": crew_list,
+            "ai_comment": "Анализ завершен успешно. Все системы работают в штатном режиме."
         }
+        log_action(
+            db,
+            admin.user_id,
+            "report_generation",
+            f"Сформирован расширенный отчет администратора за период {d_start.strftime('%d.%m.%Y')} - {d_end.strftime('%d.%m.%Y')}"
+        )
+        return response_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -609,11 +717,43 @@ def get_performance_trends(
     else:
         forecast = "Недостаточно данных для прогноза"
     
-    return {
+    response_data = {
         "daily_average": daily_data,
         "risk_events": risk_list,
         "forecast": forecast
     }
+    log_action(db, admin.user_id, "report_generation", "Сформирован отчет ИИ-трендов работоспособности за 30 дней")
+    return response_data
+
+
+@app.get("/admin/audit-logs", tags=["Администратор"])
+def get_audit_logs(
+    admin: Annotated[models.User, Depends(get_current_admin)],
+    db: Session = Depends(database.get_db),
+    limit: int = Query(200, ge=1, le=1000)
+):
+    query = text("""
+        SELECT a.timestamp,
+               COALESCE(u.last_name || ' ' || u.first_name, 'Система') as actor,
+               a.action_type,
+               a.description,
+               COALESCE(a.result, 'success') as result,
+               CASE WHEN t.user_id IS NULL THEN NULL ELSE t.last_name || ' ' || t.first_name END as target
+        FROM audit_logs a
+        LEFT JOIN users u ON a.performed_by = u.user_id
+        LEFT JOIN users t ON a.target_user_id = t.user_id
+        ORDER BY a.timestamp DESC
+        LIMIT :limit
+    """)
+    res = db.execute(query, {"limit": limit}).fetchall()
+    return [{
+        "timestamp": r[0].isoformat() if r[0] else None,
+        "actor": r[1],
+        "type": r[2],
+        "desc": r[3],
+        "result": r[4],
+        "target": r[5]
+    } for r in res]
 
 @app.get("/admin/medical-audit", tags=["Администратор"])
 def get_medical_audit(
@@ -663,6 +803,7 @@ def get_medical_audit(
 
 @app.get("/dispatcher/report", tags=["Диспетчер"])
 def get_dispatcher_report(
+    user: Annotated[models.User, Depends(get_current_user)],
     db: Session = Depends(database.get_db),
     start_date: str = Query(None),
     end_date: str = Query(None)
@@ -711,7 +852,7 @@ def get_dispatcher_report(
     else:
         ai_comment += f"ВНИМАНИЕ: Выявлено {risk_count} рейсов, где экипаж находился в зоне риска (ЧСС выше нормы). Требуется анализ медицинских карт сотрудников."
 
-    return {
+    response_data = {
         "report_date": now.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M"),
         "period": f"{d_start.strftime('%d.%m.%Y %H:%M')} — {d_end.strftime('%d.%m.%Y %H:%M')}",
         "total_flights": len(finished_flights),
@@ -720,50 +861,8 @@ def get_dispatcher_report(
         "flights": report_data,
         "ai_summary": ai_comment
     }
-    d_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-    d_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
-    
-    # Ищем ЗАВЕРШЕННЫЕ рейсы за выбранный период
-    finished_flights = db.execute(text("""
-        SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
-               (SELECT AVG(performance_score) FROM flight_telemetry WHERE flight_id = f.flight_id) as avg_score
-        FROM flights f
-        WHERE f.status = 'Завершён' 
-        AND f.scheduled_arrival BETWEEN :start AND :end
-        ORDER BY f.scheduled_arrival DESC
-    """), {"start": d_start, "end": d_end}).fetchall()
-
-    report_data = []
-    total_score = 0
-    risk_count = 0
-    
-    for r in finished_flights:
-        score = round(r[4] or 0)
-        total_score += score
-        if score > 0 and score < 70:
-            risk_count += 1
-            
-        report_data.append({
-            "flight": r[0], "dep": r[1], "arr": r[2], "tail": r[3], "score": score
-        })
-        
-    avg_fleet = round(total_score / len(finished_flights)) if finished_flights else 0
-
-    ai_comment = f"Анализ ИИ: За выбранный период ({d_start.strftime('%d.%m.%Y')} - {d_end.strftime('%d.%m.%Y')}) средний индекс работоспособности летного состава составил {avg_fleet}%. "
-    if risk_count == 0:
-        ai_comment += "Состояние флота стабильно. Экипажи выполняли полетные задания в штатном режиме."
-    else:
-        ai_comment += f"ВНИМАНИЕ: Выявлено {risk_count} рейсов, где экипаж находился в зоне риска (ЧСС выше нормы). Требуется анализ медицинских карт сотрудников."
-
-    return {
-        "report_date": now.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y %H:%M"),
-        "period": f"{d_start.strftime('%d.%m.%Y %H:%M')} — {d_end.strftime('%d.%m.%Y %H:%M')}",
-        "total_flights": len(finished_flights),
-        "avg_fleet_score": avg_fleet,
-        "risk_flights": risk_count,
-        "flights": report_data,
-        "ai_summary": ai_comment
-    }
+    log_action(db, user.user_id, "report_generation", f"Сформирован сводный отчет ЦУП за период {d_start.strftime('%d.%m.%Y %H:%M')} - {d_end.strftime('%d.%m.%Y %H:%M')}")
+    return response_data
 
 # ==========================================
 # 4. МЕДИЦИНСКИЙ БЛОК
@@ -848,30 +947,36 @@ def get_medic_journals(db: Session = Depends(database.get_db), date: str = Query
 def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)], data: dict, db: Session = Depends(database.get_db)):
     try:
         now = datetime.now(timezone.utc)
-        # Если сотрудник отстранен, используем переданную причину, иначе "Допущен"
-        conclusion = data.get('reason', 'Жалоб нет, состояние удовлетворительное')
+        raw_admitted = data.get('is_admitted', True)
+        is_admitted = raw_admitted if isinstance(raw_admitted, bool) else str(raw_admitted).lower() in ('true', '1', 'yes', 'да')
+        status_text = "ДОПУЩЕН" if is_admitted else "ОТСТРАНЕН"
+        result = "success" if is_admitted else "warning"
+        conclusion = data.get('reason') or data.get('complaints') or ("Жалоб нет, состояние удовлетворительное" if is_admitted else "Причина отстранения не указана")
+        pulse = data.get('pulse')
+        bp = data.get('bp', '120/80')
+        assignment_id = data.get('assignment_id')
+        has_assignment = assignment_id and str(assignment_id).lower() not in ('none', 'null', 'undefined')
         
-        if data.get('assignment_id'):
-            # Записываем в базу (добавляем причину в описание/заключение)
+        if has_assignment:
+            # Записываем в базу результат предрейсового осмотра
             db.execute(text("""
                 INSERT INTO preflight_medical_checks (check_id, assignment_id, medic_user_id, pulse_at_check, is_admitted, check_time)
                 VALUES (gen_random_uuid(), :aid, :mid, :pulse, :adm, :ts)
             """), {
-                "aid": data['assignment_id'], "mid": medic.user_id, 
-                "pulse": data['pulse'], "adm": data['is_admitted'], "ts": now
+                "aid": assignment_id,
+                "mid": medic.user_id,
+                "pulse": pulse,
+                "adm": is_admitted,
+                "ts": now
             })
 
-        # Логируем в аудит с указанием конкретной причины
-        db.execute(text("""
-            INSERT INTO audit_logs (audit_id, action_type, performed_by, target_user_id, description, timestamp, result)
-            VALUES (gen_random_uuid(), 'medical_check', :mid, :tid, :desc, :ts, :res)
-        """), {
-            "mid": medic.user_id, "tid": data['user_id'], 
-            "desc": f"АД: {data['bp']}. Пульс: {data['pulse']}. Причина: {conclusion}", 
-            "ts": now, "res": "success" if data['is_admitted'] else "warning"
-        })
-        
         db.commit()
+        log_action(
+            db, medic.user_id, "medical_check",
+            f"Проведен осмотр. Результат: {status_text}. ЧСС: {pulse}, АД: {bp}. Причина: {conclusion}",
+            result=result,
+            target_id=data.get('user_id')
+        )
         return {"status": "success"}
     except Exception as e:
         db.rollback()
