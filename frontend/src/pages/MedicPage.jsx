@@ -147,23 +147,29 @@ const MedicPage = ({ user, onLogout }) => {
             {loading ? <div className="text-center py-20"><Loader2 className="animate-spin inline-block text-emerald-500" size={48}/></div> : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {filteredCrew.map((c, i) => (
-                  <div key={i} className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] shadow-lg border border-slate-200 dark:border-slate-700 hover:border-emerald-500 transition-colors group">
+                  <div key={i} className={`p-6 rounded-[2rem] shadow-lg border transition-all group ${c.is_checked ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-900/10 dark:border-emerald-900/30' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-emerald-500'}`}>
                     <div className="flex justify-between items-start mb-4">
                       <div>
-                        <span className="px-3 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-[9px] font-black uppercase tracking-widest">{c.position}</span>
-                        <h3 className="text-xl font-black mt-2 leading-tight">{c.fio}</h3>
+                        <span className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${c.is_checked ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>{c.position}</span>
+                        <h3 className={`text-xl font-black mt-2 leading-tight ${c.is_checked ? 'text-slate-500 dark:text-slate-400' : 'text-slate-900 dark:text-white'}`}>{c.fio}</h3>
                       </div>
                       <div className="text-right">
-                        <span className="text-2xl font-black text-blue-600 italic tracking-tighter">{c.flight_number}</span>
+                        <span className={`text-2xl font-black italic tracking-tighter ${c.is_checked ? 'text-emerald-500/50' : 'text-blue-600'}`}>{c.flight_number}</span>
                         <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Вылет: {c.departure}</p>
                       </div>
                     </div>
                     
-                    <button 
-                      onClick={() => { setSelectedCrew(c); setShowModal(true); setCheckData({...checkData, pulse: '', is_admitted: true}); }} 
-                      className="w-full mt-4 py-3 bg-slate-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 font-bold rounded-xl group-hover:bg-emerald-600 group-hover:text-white transition-colors flex items-center justify-center gap-2">
-                      <Activity size={18}/> Провести осмотр
-                    </button>
+                    {c.is_checked ? (
+                      <button disabled className="w-full mt-4 py-3 bg-emerald-100/50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-500 border border-emerald-200/50 dark:border-emerald-800/30 font-bold rounded-xl flex items-center justify-center gap-2 cursor-not-allowed">
+                        <CheckCircle size={18}/> Осмотр пройден
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => { setSelectedCrew(c); setShowModal(true); setCheckData({...checkData, pulse: '', is_admitted: true}); }} 
+                        className="w-full mt-4 py-3 bg-slate-50 dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 font-bold rounded-xl hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white transition-colors flex items-center justify-center gap-2">
+                        <Activity size={18}/> Провести осмотр
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

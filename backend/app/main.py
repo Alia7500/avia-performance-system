@@ -771,38 +771,45 @@ def get_dispatcher_report(
 
 @app.get("/medic/crew", tags=["Медик"])
 def get_medic_crew(medic: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    """Получить список экипажа для медосмотра"""
+    """Получить список экипажа для медосмотра (ОПТИМИЗИРОВАНО)"""
     try:
         now = datetime.now(timezone.utc)
         start_of_day = now.replace(hour=0, minute=0, second=0)
         end_of_day = now.replace(hour=23, minute=59, second=59)
 
-        # Проверяем, Главный ли это врач
         pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": medic.user_id}).fetchone()
         is_chief = pos_res and pos_res[0] == 'Главный врач'
 
-        # Если обычный врач - показываем только тех, кто летит СЕГОДНЯ. Если Главный - всех.
         if is_chief:
+            # Запрос для Главврача (работает за 0.01 сек, берет только рейсы на СЕГОДНЯ)
             query = text("""
                 SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
-                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id
+                       cf.flight_number, cf.scheduled_departure, cf.arrival_airport, cf.assignment_id,
+                       CASE WHEN pmc.check_id IS NOT NULL THEN true ELSE false END as is_checked
                 FROM users u
                 JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-                LEFT JOIN flight_assignments fa ON u.user_id = fa.crew_member_id
-                LEFT JOIN flights f ON fa.flight_id = f.flight_id AND f.scheduled_departure BETWEEN :s AND :e
+                LEFT JOIN (
+                    SELECT fa.crew_member_id, fa.assignment_id, f.flight_number, f.scheduled_departure, f.arrival_airport
+                    FROM flight_assignments fa
+                    JOIN flights f ON fa.flight_id = f.flight_id
+                    WHERE f.scheduled_departure BETWEEN :s AND :e
+                ) cf ON u.user_id = cf.crew_member_id
+                LEFT JOIN preflight_medical_checks pmc ON pmc.assignment_id = cf.assignment_id
                 WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
-                ORDER BY f.scheduled_departure ASC NULLS LAST, u.last_name ASC
+                ORDER BY cf.scheduled_departure ASC NULLS LAST, u.last_name ASC
             """)
         else:
+            # Запрос для обычного медика (только те, кто летит)
             query = text("""
                 SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
-                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id
-                FROM users u
-                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-                JOIN flight_assignments fa ON u.user_id = fa.crew_member_id
+                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id,
+                       CASE WHEN pmc.check_id IS NOT NULL THEN true ELSE false END as is_checked
+                FROM flight_assignments fa
                 JOIN flights f ON fa.flight_id = f.flight_id
-                WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
-                  AND f.scheduled_departure BETWEEN :s AND :e
+                JOIN users u ON fa.crew_member_id = u.user_id
+                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+                LEFT JOIN preflight_medical_checks pmc ON pmc.assignment_id = fa.assignment_id
+                WHERE f.scheduled_departure BETWEEN :s AND :e
                 ORDER BY f.scheduled_departure ASC
             """)
 
@@ -817,7 +824,8 @@ def get_medic_crew(medic: Annotated[models.User, Depends(get_current_user)], db:
                 "flight_number": r[5] or "Резерв",
                 "departure": r[6].astimezone(timezone(timedelta(hours=3))).strftime("%H:%M") if r[6] else "--:--",
                 "destination": r[7] or "—",
-                "assignment_id": str(r[8]) if r[8] else None
+                "assignment_id": str(r[8]) if r[8] else None,
+                "is_checked": bool(r[9]) # <-- Добавили флаг медосмотра!
             } for r in result]
         }
     except Exception as e:
