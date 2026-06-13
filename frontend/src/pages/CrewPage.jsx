@@ -5,7 +5,7 @@ import { Activity, Heart, Plane, LogOut, Calendar, Upload, Moon, Sun, TrendingUp
 
 const CrewPage = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
   const [telemetry, setTelemetry] = useState([]);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [myFlight, setMyFlight] = useState(null);
@@ -61,11 +61,24 @@ const CrewPage = ({ user, onLogout }) => {
 
   // Расчет ИИ-тренда для статистики
   const getTrendAnalysis = () => {
-    if (medicalLogs.length < 2) return "Недостаточно данных для формирования долгосрочного прогноза ИИ.";
-    const recentAvg = medicalLogs.slice(0, 3).reduce((acc, l) => acc + l.performance_score, 0) / Math.min(3, medicalLogs.length);
-    if (recentAvg > 85) return "Позитивный тренд: Ваша работоспособность стабильно высока. Организм отлично справляется с полетными нагрузками.";
-    if (recentAvg > 70) return "Стабильный тренд: Показатели в норме, однако наблюдаются небольшие колебания ЧСС. Рекомендуется соблюдать режим сна.";
-    return "ОТРИЦАТЕЛЬНЫЙ ТРЕНД: ИИ фиксирует систематическое снижение работоспособности. Обратитесь в медицинскую службу для внепланового осмотра.";
+    // 1. Проверяем telemetryHistory вместо medicalLogs
+    if (!telemetryHistory || telemetryHistory.length < 2) {
+      return "Система ожидает накопления данных за текущий месяц для формирования прогноза.";
+    }
+
+    // 2. Считаем средний индекс работоспособности по последним рейсам
+    const recentAvg = telemetryHistory.slice(0, 5).reduce((acc, l) => acc + l.score, 0) / Math.min(5, telemetryHistory.length);
+    const avgStress = telemetryHistory.slice(0, 5).reduce((acc, l) => acc + l.stress, 0) / Math.min(5, telemetryHistory.length);
+
+    if (recentAvg > 85 && avgStress < 25) {
+      return "Заключение ИИ-Агента: Позитивный тренд. Ваша работоспособность стабильно высока. Организм отлично справляется с полетными нагрузками. Ресурсы организма в норме.";
+    } 
+    
+    if (recentAvg > 70) {
+      return "Заключение ИИ-Агента: Стабильный тренд. Показатели в пределах нормы, однако наблюдаются небольшие колебания ЧСС. Рекомендуется придерживаться графика отдыха.";
+    }
+
+    return "ВНИМАНИЕ: ИИ фиксирует систематическое снижение работоспособности на последних рейсах. Рекомендуется внеплановый медицинский осмотр.";
   };
 
   const userFio = user?.fio || 'Экипаж';

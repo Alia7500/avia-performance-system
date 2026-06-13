@@ -233,38 +233,41 @@ async def admin_create_user(
     db: Session = Depends(database.get_db)
 ):
     try:
+        # 1. Находим UUID роли
         role_name = user_data.get('role_name', 'crew_member')
         role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": role_name}).fetchone()
-        if not role_res: raise Exception("Роль не найдена")
-            
+        
+        # 2. Создаем основного пользователя
         hashed_pwd = security.get_password_hash(str(user_data['password']))
+        new_user_id = uuid.uuid4()
+        
         new_user = models.User(
-            user_id=uuid.uuid4(), email=user_data['email'], password_hash=hashed_pwd,
-            first_name=user_data['first_name'], last_name=user_data['last_name'],
-            patronymic=user_data.get('patronymic', ""), role_id=role_res[0],
+            user_id=new_user_id,
+            email=user_data['email'],
+            password_hash=hashed_pwd,
+            first_name=user_data['first_name'],
+            last_name=user_data['last_name'],
+            patronymic=user_data.get('patronymic', ""),
+            role_id=role_res[0],
             baseline_hr=int(user_data.get('baseline_hr', 75))
         )
         db.add(new_user)
-        db.flush() 
+        db.flush() # Генерируем ID в сессии, но не закрываем транзакцию
 
-        if role_name == 'medical_worker':
-            pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
-            # ИСПРАВЛЕНО: Убрана колонка crew_member_id (подстраиваемся под базу Неона)
+        # 3. ЕСЛИ ЭТО ЭКИПАЖ — ДОБАВЛЯЕМ ДОЛЖНОСТЬ В ТАБЛИЦУ flight_crew_members
+        if role_name == 'crew_member':
+            position = user_data.get('position', 'Бортпроводник')
             db.execute(text("""
-                INSERT INTO flight_crew_members (user_id, position) 
-                VALUES (:uid, :pos) 
-                ON CONFLICT (user_id) DO UPDATE SET position = :pos
-            """), {"uid": new_user.user_id, "pos": pos})
+                INSERT INTO flight_crew_members (crew_member_id, user_id, position)
+                VALUES (:cm_id, :u_id, :pos)
+            """), {
+                "cm_id": uuid.uuid4(),
+                "u_id": new_user_id,
+                "pos": position
+            })
 
-        created_user_id = new_user.user_id
-        created_user_name = f"{new_user.last_name} {new_user.first_name}"
         db.commit()
-        log_action(
-            db, admin.user_id, "user_create",
-            f"Создан пользователь: {created_user_name}. Роль: {role_name}",
-            target_id=created_user_id
-        )
-        return {"status": "success"}
+        return {"status": "success", "message": "Аккаунт сотрудника создан"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
@@ -378,6 +381,8 @@ async def delete_user(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
+
+
 
 @app.post("/crew/upload-health", tags=["Экипаж"])
 async def upload_health(
