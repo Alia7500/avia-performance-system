@@ -764,3 +764,95 @@ def get_dispatcher_report(
         "flights": report_data,
         "ai_summary": ai_comment
     }
+
+# ==========================================
+# 4. МЕДИЦИНСКИЙ БЛОК
+# ==========================================
+
+@app.get("/medic/crew", tags=["Медик"])
+def get_medic_crew(medic: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
+    """Получить список экипажа для медосмотра"""
+    try:
+        now = datetime.now(timezone.utc)
+        start_of_day = now.replace(hour=0, minute=0, second=0)
+        end_of_day = now.replace(hour=23, minute=59, second=59)
+
+        # Проверяем, Главный ли это врач
+        pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": medic.user_id}).fetchone()
+        is_chief = pos_res and pos_res[0] == 'Главный врач'
+
+        # Если обычный врач - показываем только тех, кто летит СЕГОДНЯ. Если Главный - всех.
+        if is_chief:
+            query = text("""
+                SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
+                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id
+                FROM users u
+                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+                LEFT JOIN flight_assignments fa ON u.user_id = fa.crew_member_id
+                LEFT JOIN flights f ON fa.flight_id = f.flight_id AND f.scheduled_departure BETWEEN :s AND :e
+                WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
+                ORDER BY f.scheduled_departure ASC NULLS LAST, u.last_name ASC
+            """)
+        else:
+            query = text("""
+                SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
+                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id
+                FROM users u
+                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+                JOIN flight_assignments fa ON u.user_id = fa.crew_member_id
+                JOIN flights f ON fa.flight_id = f.flight_id
+                WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
+                  AND f.scheduled_departure BETWEEN :s AND :e
+                ORDER BY f.scheduled_departure ASC
+            """)
+
+        result = db.execute(query, {"s": start_of_day, "e": end_of_day}).fetchall()
+
+        return {
+            "is_chief": is_chief,
+            "crew": [{
+                "user_id": str(r[0]),
+                "fio": f"{r[1]} {r[2]} {r[3] or ''}".strip(),
+                "position": r[4],
+                "flight_number": r[5] or "Резерв",
+                "departure": r[6].astimezone(timezone(timedelta(hours=3))).strftime("%H:%M") if r[6] else "--:--",
+                "destination": r[7] or "—",
+                "assignment_id": str(r[8]) if r[8] else None
+            } for r in result]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/medic/check", tags=["Медик"])
+def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)], data: dict, db: Session = Depends(database.get_db)):
+    """Сохранение результатов медосмотра"""
+    try:
+        now = datetime.now(timezone.utc)
+        
+        # 1. Записываем в официальную таблицу медосмотров (если есть рейс)
+        if data.get('assignment_id'):
+            db.execute(text("""
+                INSERT INTO preflight_medical_checks (check_id, assignment_id, medic_user_id, pulse_at_check, is_admitted, check_time)
+                VALUES (gen_random_uuid(), :aid, :mid, :pulse, :adm, :ts)
+            """), {
+                "aid": data['assignment_id'], "mid": medic.user_id, 
+                "pulse": data['pulse'], "adm": data['is_admitted'], "ts": now
+            })
+
+        # 2. Логируем в аудит
+        status_text = "ДОПУЩЕН" if data['is_admitted'] else "ОТСТРАНЕН"
+        desc = f"Жалобы: {data['complaints']}. АД: {data['bp']}. Пульс: {data['pulse']}. Алкоголь: {data['alcohol']}. Решение: {status_text}."
+        
+        db.execute(text("""
+            INSERT INTO audit_logs (audit_id, action_type, performed_by, target_user_id, description, timestamp, result)
+            VALUES (gen_random_uuid(), 'medical_check', :mid, :tid, :desc, :ts, :res)
+        """), {
+            "mid": medic.user_id, "tid": data['user_id'], "desc": desc, "ts": now,
+            "res": "success" if data['is_admitted'] else "warning"
+        })
+        
+        db.commit()
+        return {"status": "success"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
