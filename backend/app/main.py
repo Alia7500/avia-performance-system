@@ -856,6 +856,7 @@ def get_medic_journals(db: Session = Depends(database.get_db), start_date: str =
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
 @app.post("/medic/check", tags=["Медик"])
 def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)], data: dict, db: Session = Depends(database.get_db)):
     """Сохранение результатов медосмотра"""
