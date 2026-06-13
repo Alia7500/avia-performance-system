@@ -120,11 +120,18 @@ const AdminPage = ({ user, onLogout }) => {
     }
   };
 
-  const filteredStaff = staff.filter(s => {
-    const matchesSearch = `${s.first_name} ${s.last_name}`.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole = filterRole === 'all' || s.role_name === filterRole;
-    return matchesSearch && matchesRole;
-  });
+  const filteredStaff = staff
+    .filter(s => {
+      const matchesSearch = `${s.first_name} ${s.last_name}`.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesRole = filterRole === 'all' || s.role_name === filterRole;
+      return matchesSearch && matchesRole;
+    })
+    .sort((a, b) => {
+      // Администраторы всегда сверху!
+      if (a.role_name === 'administrator' && b.role_name !== 'administrator') return -1;
+      if (a.role_name !== 'administrator' && b.role_name === 'administrator') return 1;
+      return a.last_name.localeCompare(b.last_name);
+    });
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
@@ -380,6 +387,21 @@ const AdminPage = ({ user, onLogout }) => {
                 <input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
               </div>
             </div>
+            
+            {formData.role_name === 'medical_worker' && (
+              <div className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800 mt-4">
+                <input 
+                  type="checkbox" 
+                  id="ext" 
+                  checked={formData.is_extended || false} 
+                  onChange={e => setFormData({...formData, is_extended: e.target.checked})} 
+                  className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
+                />
+                <label htmlFor="ext" className="text-sm font-bold text-purple-800 dark:text-purple-300 cursor-pointer select-none">
+                  Расширенные возможности (Должность: Главный врач)
+                </label>
+              </div>
+            )}
             
             <div className="flex gap-4 mt-8">
               <button onClick={() => { setShowModal(false); setShowPassword(false); }} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition">Отмена</button>

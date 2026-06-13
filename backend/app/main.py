@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -28,20 +27,6 @@ logger = logging.getLogger(__name__)
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Авиа-Агент МС-21: Центр Управления")
-
-# CORS для фронтенда
-origins = [
-    "https://avia-evm-web-app-ru.ru",
-    "https://www.avia-evm-web-app-ru.ru",
-    "http://localhost:3000", # Оставляем для локальных тестов
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -194,36 +179,34 @@ async def admin_create_user(
     db: Session = Depends(database.get_db)
 ):
     try:
-        # Находим UUID роли по текстовому имени
         role_name = user_data.get('role_name', 'crew_member')
         role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": role_name}).fetchone()
-        if not role_res:
-            raise Exception(f"Роль '{role_name}' не найдена в системе")
-            
-        existing = db.query(models.User).filter(models.User.email == user_data['email']).first()
-        if existing:
-            raise Exception("Email уже занят другим сотрудником")
+        if not role_res: raise Exception("Роль не найдена")
             
         hashed_pwd = security.get_password_hash(str(user_data['password']))
         new_user = models.User(
-            user_id=uuid.uuid4(),
-            email=user_data['email'],
-            password_hash=hashed_pwd,
-            first_name=user_data['first_name'],
-            last_name=user_data['last_name'],
-            patronymic=user_data.get('patronymic', ""),
-            role_id=role_res[0],
+            user_id=uuid.uuid4(), email=user_data['email'], password_hash=hashed_pwd,
+            first_name=user_data['first_name'], last_name=user_data['last_name'],
+            patronymic=user_data.get('patronymic', ""), role_id=role_res[0],
             baseline_hr=int(user_data.get('baseline_hr', 75))
         )
         db.add(new_user)
+        db.flush() # Сохраняем, чтобы получить ID
+
+        # Если это медработник, записываем "расширенные возможности" как должность "Главный врач"
+        if role_name == 'medical_worker':
+            pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
+            db.execute(text("""
+                INSERT INTO flight_crew_members (crew_member_id, user_id, position) 
+                VALUES (gen_random_uuid(), :uid, :pos) 
+                ON CONFLICT (user_id) DO UPDATE SET position = :pos
+            """), {"uid": new_user.user_id, "pos": pos})
+
         db.commit()
-        return {"status": "success", "message": "Сотрудник добавлен"}
+        return {"status": "success"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-
-
-
 
 @app.get("/admin/staff", tags=["Администратор"])
 def get_all_staff(db: Session = Depends(database.get_db), role: str = Query(None), search: str = Query(None)):
@@ -245,38 +228,39 @@ def get_all_staff(db: Session = Depends(database.get_db), role: str = Query(None
 
 @app.put("/admin/update_user/{user_id}", tags=["Администратор"])
 async def update_user(
-    user_id: str,
-    admin: Annotated[models.User, Depends(get_current_admin)],
-    user_data: dict,
-    db: Session = Depends(database.get_db)
+    user_id: str, admin: Annotated[models.User, Depends(get_current_admin)],
+    user_data: dict, db: Session = Depends(database.get_db)
 ):
     user = db.query(models.User).filter(models.User.user_id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if not user: raise HTTPException(status_code=404, detail="Не найден")
     
     try:
-        if 'first_name' in user_data and user_data['first_name']: user.first_name = user_data['first_name']
-        if 'last_name' in user_data and user_data['last_name']: user.last_name = user_data['last_name']
+        if 'first_name' in user_data: user.first_name = user_data['first_name']
+        if 'last_name' in user_data: user.last_name = user_data['last_name']
         if 'patronymic' in user_data: user.patronymic = user_data.get('patronymic', "")
-        if 'email' in user_data and user_data['email']: user.email = user_data['email']
-        
-        # Защита от пустых строк в числах
-        if 'baseline_hr' in user_data and str(user_data['baseline_hr']).isdigit():
-            user.baseline_hr = int(user_data['baseline_hr'])
+        if 'email' in user_data: user.email = user_data['email']
+        if 'baseline_hr' in user_data: user.baseline_hr = int(user_data['baseline_hr'])
         
         if 'role_name' in user_data:
             role_res = db.execute(text("SELECT role_id FROM roles WHERE role_name = :r"), {"r": user_data['role_name']}).fetchone()
             if role_res: user.role_id = role_res[0]
-        
-        # Смена пароля
+
         if 'password' in user_data and str(user_data['password']).strip():
             user.password_hash = security.get_password_hash(str(user_data['password']).strip())
-            
+
+        if user_data.get('role_name') == 'medical_worker':
+            pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
+            db.execute(text("""
+                INSERT INTO flight_crew_members (crew_member_id, user_id, position) 
+                VALUES (gen_random_uuid(), :uid, :pos) 
+                ON CONFLICT (user_id) DO UPDATE SET position = :pos
+            """), {"uid": user.user_id, "pos": pos})
+
         db.commit()
-        return {"status": "success", "message": "Данные успешно обновлены"}
+        return {"status": "success"}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/admin/delete_user/{user_id}", tags=["Администратор"])
 async def delete_user(
@@ -484,101 +468,61 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     } for r in active_flights]
 
 @app.get("/admin/extended-reports", tags=["Администратор"])
-def get_extended_reports(
-    admin: Annotated[models.User, Depends(get_current_admin)],
-    db: Session = Depends(database.get_db),
-    start_date: str = Query(None),
-    end_date: str = Query(None)
-):
+def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin)], db: Session = Depends(database.get_db), start_date: str = Query(None), end_date: str = Query(None)):
     try:
         now = datetime.now(timezone.utc)
-        # Пуленепробиваемый парсинг дат
-        def safe_parse(d_str, default_dt):
-            if not d_str or d_str == "undefined": return default_dt
-            try:
-                # Отрезаем всё лишнее, оставляем только YYYY-MM-DD HH:MM
-                clean_str = d_str.replace("T", " ")[:16] 
-                return datetime.strptime(clean_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-            except:
-                return default_dt
+        def parse_d(d_str, default):
+            if not d_str or d_str == "undefined": return default
+            try: return datetime.strptime(d_str.replace("T", " ")[:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            except: return default
 
-        d_start = safe_parse(start_date, now - timedelta(days=30))
-        d_end = safe_parse(end_date, now)
+        d_start = parse_d(start_date, now - timedelta(days=30))
+        d_end = parse_d(end_date, now)
 
-        query = text("""
-            SELECT 
-                u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position,
-                COUNT(DISTINCT ft.flight_id) as total_flights,
-                AVG(ft.performance_score) as avg_performance,
-                MIN(ft.performance_score) as min_performance,
-                AVG(ft.heart_rate) as avg_hr, AVG(ft.spo2) as avg_spo2, AVG(CAST(ft.stress_level AS FLOAT)) as avg_stress
+        result = db.execute(text("""
+            SELECT u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position,
+                   COUNT(DISTINCT ft.flight_id), AVG(ft.performance_score), MIN(ft.performance_score),
+                   AVG(ft.heart_rate), AVG(ft.spo2), AVG(CAST(ft.stress_level AS FLOAT))
             FROM users u
             LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-            LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id AND ft.record_timestamp BETWEEN :start AND :end
+            LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id AND ft.record_timestamp BETWEEN :s AND :e
             GROUP BY u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position
-            ORDER BY avg_performance DESC NULLS LAST
-        """)
-        result = db.execute(query, {"start": d_start, "end": d_end}).fetchall()
+            ORDER BY u.role_id, avg_performance DESC NULLS LAST
+        """), {"s": d_start, "e": d_end}).fetchall()
 
         crew_list = []
-        total_perf_sum = 0
-        processed_crew = 0
+        total_perf = 0
+        processed = 0
 
         for r in result:
-            avg_perf = float(r[6]) if r[6] else 0
+            # Бронебойная защита от None (Пустоты)
+            avg_perf = float(r[6]) if r[6] is not None else 0
+            min_perf = float(r[7]) if r[7] is not None else 0
+            avg_hr = float(r[8]) if r[8] is not None else 0
+            base_hr = int(r[3]) if r[3] is not None else 75
+            
             if r[5] == 0:
-                crew_list.append({"fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": 0, "performance": 0, "status": "Нет данных", "notes": "Полеты отсутствуют"})
+                crew_list.append({"fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": 0, "performance": 0, "status": "Нет данных", "notes": "Полеты отсутствуют", "avg_hr": 0})
                 continue
 
-            total_perf_sum += avg_perf
-            processed_crew += 1
+            total_perf += avg_perf
+            processed += 1
             status = "⚠️ Критический" if avg_perf < 60 else "⚠️ Риск" if avg_perf < 75 else "Оптимальный"
             
             crew_list.append({
                 "fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": r[5],
-                "performance": round(avg_perf, 1), "min_performance": round(float(r[7]) if r[7] else 0, 1),
-                "avg_hr": round(float(r[8]) if r[8] else 0), "status": status, "notes": "Штатно" if avg_perf >= 75 else "Снижение показателей"
+                "performance": round(avg_perf, 1), "min_performance": round(min_perf, 1),
+                "avg_hr": round(avg_hr), "status": status, 
+                "notes": f"ЧСС: {round(avg_hr)} (Норма {base_hr})" if avg_perf < 75 else "Штатно"
             })
 
-        avg_fleet = round(total_perf_sum / processed_crew) if processed_crew > 0 else 0
+        avg_fleet = round(total_perf / processed) if processed > 0 else 0
         return {
             "summary": {"total_crew": len(crew_list), "avg_performance": avg_fleet, "at_risk_count": 0, "critical_count": 0, "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"},
-            "crew_list": crew_list, "ai_comment": "Анализ завершен успешно. Все системы работают в штатном режиме."
+            "crew_list": crew_list, "ai_comment": "Анализ завершен успешно."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-        # 4. Формирование финального ИИ-комментария
-        avg_fleet = round(total_perf_sum / processed_crew) if processed_crew > 0 else 0
-        
-        ai_comment = f"Анализ ИИ за период {d_start.strftime('%d.%m')}—{d_end.strftime('%d.%m.%Y')}: "
-        ai_comment += f"Всего обследовано {len(crew_list)} чел. "
-        ai_comment += f"Средний индекс готовности флота МС-21 составляет {avg_fleet}%. "
-        
-        if critical_count > 0:
-            ai_comment += f"ВНИМАНИЕ: Обнаружено {critical_count} сотрудников в критическом состоянии! "
-        if at_risk_count > 0:
-            ai_comment += f"Рекомендация: усилить мониторинг для {at_risk_count} членов экипажа из зоны риска."
-        if critical_count == 0 and at_risk_count == 0:
-            ai_comment += "Состояние летного состава стабильно. Рекомендовано продолжать полеты по расписанию."
-
-        # 5. Возврат объекта (ровно то, что ждет фронтенд)
-        return {
-            "summary": {
-                "total_crew": len(crew_list),
-                "avg_performance": avg_fleet,
-                "at_risk_count": at_risk_count,
-                "critical_count": critical_count,
-                "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"
-            },
-            "crew_list": crew_list,
-            "ai_comment": ai_comment
-        }
-
-    except Exception as e:
-        logger.error(f"CRITICAL REPORT ERROR: {str(e)}")
-        # Если что-то пошло не так, возвращаем 500 ошибку с описанием
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации отчета: {str(e)}")
 
 @app.get("/admin/performance-trends", tags=["Администратор"])
 def get_performance_trends(
