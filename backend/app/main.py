@@ -770,50 +770,46 @@ def get_dispatcher_report(
 # ==========================================
 
 @app.get("/medic/crew", tags=["Медик"])
-def get_medic_crew(medic: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
-    """Получить список экипажа для медосмотра (ОПТИМИЗИРОВАНО)"""
+def get_medic_crew(
+    medic: Annotated[models.User, Depends(get_current_user)], 
+    db: Session = Depends(database.get_db),
+    target_date: str = Query(None) # Формат YYYY-MM-DD
+):
     try:
         now = datetime.now(timezone.utc)
-        start_of_day = now.replace(hour=0, minute=0, second=0)
-        end_of_day = now.replace(hour=23, minute=59, second=59)
+        if target_date:
+            # Парсим выбранную дату
+            start_dt = datetime.fromisoformat(target_date).replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
+        else:
+            start_dt = now.replace(hour=0, minute=0, second=0)
+            
+        end_dt = start_dt.replace(hour=23, minute=59, second=59)
 
         pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": medic.user_id}).fetchone()
         is_chief = pos_res and pos_res[0] == 'Главный врач'
 
-        if is_chief:
-            # Запрос для Главврача (работает за 0.01 сек, берет только рейсы на СЕГОДНЯ)
-            query = text("""
-                SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
-                       cf.flight_number, cf.scheduled_departure, cf.arrival_airport, cf.assignment_id,
-                       CASE WHEN pmc.check_id IS NOT NULL THEN true ELSE false END as is_checked
-                FROM users u
-                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-                LEFT JOIN (
-                    SELECT fa.crew_member_id, fa.assignment_id, f.flight_number, f.scheduled_departure, f.arrival_airport
-                    FROM flight_assignments fa
-                    JOIN flights f ON fa.flight_id = f.flight_id
-                    WHERE f.scheduled_departure BETWEEN :s AND :e
-                ) cf ON u.user_id = cf.crew_member_id
-                LEFT JOIN preflight_medical_checks pmc ON pmc.assignment_id = cf.assignment_id
-                WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
-                ORDER BY cf.scheduled_departure ASC NULLS LAST, u.last_name ASC
-            """)
-        else:
-            # Запрос для обычного медика (только те, кто летит)
-            query = text("""
-                SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
-                       f.flight_number, f.scheduled_departure, f.arrival_airport, fa.assignment_id,
-                       CASE WHEN pmc.check_id IS NOT NULL THEN true ELSE false END as is_checked
+        # Логика: Сначала те, у кого рейс в этот день (сортировка по времени вылета)
+        # Потом остальные (только для Главврача)
+        query = text("""
+            SELECT u.user_id, u.last_name, u.first_name, u.patronymic, fcm.position,
+                   cf.flight_number, cf.scheduled_departure, cf.arrival_airport, cf.assignment_id,
+                   pmc.check_id, pmc.pulse_at_check, pmc.is_admitted, 
+                   (SELECT description FROM audit_logs WHERE action_type='medical_check' AND target_user_id = u.user_id AND timestamp BETWEEN :s AND :e ORDER BY timestamp DESC LIMIT 1) as med_details
+            FROM users u
+            JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+            LEFT JOIN (
+                SELECT fa.crew_member_id, fa.assignment_id, f.flight_number, f.scheduled_departure, f.arrival_airport
                 FROM flight_assignments fa
                 JOIN flights f ON fa.flight_id = f.flight_id
-                JOIN users u ON fa.crew_member_id = u.user_id
-                JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-                LEFT JOIN preflight_medical_checks pmc ON pmc.assignment_id = fa.assignment_id
                 WHERE f.scheduled_departure BETWEEN :s AND :e
-                ORDER BY f.scheduled_departure ASC
-            """)
+            ) cf ON u.user_id = cf.crew_member_id
+            LEFT JOIN preflight_medical_checks pmc ON (pmc.assignment_id = cf.assignment_id OR (pmc.assignment_id IS NULL AND pmc.check_time BETWEEN :s AND :e))
+            WHERE u.role_id = (SELECT role_id FROM roles WHERE role_name = 'crew_member')
+            AND (:is_chief = true OR cf.flight_number IS NOT NULL)
+            ORDER BY cf.scheduled_departure ASC NULLS LAST, u.last_name ASC
+        """)
 
-        result = db.execute(query, {"s": start_of_day, "e": end_of_day}).fetchall()
+        result = db.execute(query, {"s": start_dt, "e": end_dt, "is_chief": is_chief}).fetchall()
 
         return {
             "is_chief": is_chief,
@@ -821,15 +817,44 @@ def get_medic_crew(medic: Annotated[models.User, Depends(get_current_user)], db:
                 "user_id": str(r[0]),
                 "fio": f"{r[1]} {r[2]} {r[3] or ''}".strip(),
                 "position": r[4],
-                "flight_number": r[5] or "Резерв",
+                "flight_number": r[5] or "Вне рейса",
                 "departure": r[6].astimezone(timezone(timedelta(hours=3))).strftime("%H:%M") if r[6] else "--:--",
-                "destination": r[7] or "—",
                 "assignment_id": str(r[8]) if r[8] else None,
-                "is_checked": bool(r[9]) # <-- Добавили флаг медосмотра!
+                "is_checked": r[9] is not None,
+                "check_id": str(r[9]) if r[9] else None,
+                "med_data": {
+                    "pulse": r[10],
+                    "is_admitted": r[11],
+                    "details": r[12]
+                } if r[9] else None
             } for r in result]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/medic/journals", tags=["Медик"])
+def get_medic_journals(db: Session = Depends(database.get_db), start_date: str = Query(None), end_date: str = Query(None)):
+    """Получить все данные для формирования Журналов (Приложения 2 и 4)"""
+    try:
+        query = text("""
+            SELECT pmc.check_time, u.last_name || ' ' || u.first_name as fio, 
+                   fcm.position, f.flight_number, pmc.pulse_at_check, pmc.is_admitted,
+                   a.description, medic.last_name as medic_name
+            FROM preflight_medical_checks pmc
+            JOIN flight_assignments fa ON pmc.assignment_id = fa.assignment_id
+            JOIN flights f ON fa.flight_id = f.flight_id
+            JOIN users u ON fa.crew_member_id = u.user_id
+            JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+            JOIN users medic ON pmc.medic_user_id = medic.user_id
+            JOIN audit_logs a ON a.target_user_id = u.user_id AND a.action_type = 'medical_check' 
+                 AND ABS(EXTRACT(EPOCH FROM (a.timestamp - pmc.check_time))) < 60
+            ORDER BY pmc.check_time DESC
+        """)
+        res = db.execute(query).fetchall()
+        return [dict(zip(['time', 'fio', 'pos', 'flight', 'pulse', 'admitted', 'desc', 'medic'], r)) for r in res]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/medic/check", tags=["Медик"])
 def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)], data: dict, db: Session = Depends(database.get_db)):
