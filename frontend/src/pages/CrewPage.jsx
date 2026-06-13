@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api/config';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, BarChart, Bar, Cell } from 'recharts';
-import { Activity, Heart, Plane, ShieldCheck, LogOut, LayoutDashboard, Calendar, Upload, Moon, Sun, TrendingUp, History } from 'lucide-react';
+import { Activity, Heart, Plane, ShieldCheck, LogOut, LayoutDashboard, Calendar, Upload, Moon, Sun, TrendingUp, History, BrainCircuit } from 'lucide-react';
 
 const CrewPage = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [telemetry, setTelemetry] = useState([]);
+  const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [myFlight, setMyFlight] = useState(null);
   const [myFlightsList, setMyFlightsList] = useState([]);
   const [medicalLogs, setMedicalLogs] = useState([]);
@@ -24,6 +25,9 @@ const CrewPage = ({ user, onLogout }) => {
       setTelemetry(resDash.data.telemetry_history || []);
       setLatestScore(resDash.data.score || 0);
       setMyFlight(resDash.data.текущий_рейс);
+
+      const resDetailed = await api.get('/crew/stats-detailed');
+      setTelemetryHistory(resDetailed.data || []);
 
       const resList = await api.get('/crew/my-flights');
       setMyFlightsList(resList.data || []);

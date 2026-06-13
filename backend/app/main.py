@@ -500,99 +500,101 @@ def get_extended_reports(
     start_date: str = Query(None),
     end_date: str = Query(None)
 ):
-    """Расширенные сводные отчеты по всему летному составу с анализом ИИ"""
-    now = datetime.now(timezone.utc)
-    
-    if not start_date or not end_date:
-        d_start = now - timedelta(days=30)
-        d_end = now
-    else:
-        d_start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-        d_end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
-    
-    # Получаем статистику по всему экипажу
-    crew_stats = db.execute(text("""
-        SELECT 
-            u.user_id, u.first_name, u.last_name, u.baseline_hr,
-            fcm.position,
-            COUNT(DISTINCT ft.flight_id) as total_flights,
-            AVG(ft.performance_score) as avg_performance,
-            MAX(ft.performance_score) as max_performance,
-            MIN(ft.performance_score) as min_performance,
-            AVG(ft.heart_rate) as avg_hr,
-            AVG(ft.spo2) as avg_spo2,
-            AVG(CAST(ft.stress_level AS FLOAT)) as avg_stress
-        FROM users u
-        LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
-        LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id 
-            AND ft.record_timestamp BETWEEN :start AND :end
-        WHERE u.role_id != (SELECT role_id FROM roles WHERE role_name = 'administrator')
-        GROUP BY u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position
-        ORDER BY avg_performance DESC
-    """), {"start": d_start, "end": d_end}).fetchall()
-    
-    # Анализируем результаты
-    crew_list = []
-    total_performance = 0
-    at_risk_count = 0
-    critical_count = 0
-    
-    for r in crew_stats:
-        avg_perf = float(r[6]) if r[6] else 0
-        total_performance += avg_perf
+    try:
+        now = datetime.now(timezone.utc)
         
-        status = "Оптимальный"
-        notes = ""
+        # Исправленный парсинг дат (защита от разных форматов браузеров)
+        if not start_date or not end_date:
+            d_start = now - timedelta(days=30)
+            d_end = now
+        else:
+            # Убираем "Z" если есть и переводим в UTC
+            d_start = datetime.fromisoformat(start_date.replace("Z", "")).replace(tzinfo=timezone.utc)
+            d_end = datetime.fromisoformat(end_date.replace("Z", "")).replace(tzinfo=timezone.utc)
         
-        if avg_perf < 60:
-            critical_count += 1
-            status = "⚠️ Критический"
-            notes = "Требуется срочное медицинское обследование"
-        elif avg_perf < 75:
-            at_risk_count += 1
-            status = "⚠️ Риск"
-            notes = f"Повышенный пульс: {int(float(r[9]) or 0)} bpm (норма: {r[3]})"
-        elif float(r[10]) if r[10] else 98 < 94:
-            notes = "Низкий уровень кислорода"
+        crew_stats = db.execute(text("""
+            SELECT 
+                u.user_id, u.first_name, u.last_name, u.baseline_hr,
+                fcm.position,
+                COUNT(DISTINCT ft.flight_id) as total_flights,
+                AVG(ft.performance_score) as avg_performance,
+                MAX(ft.performance_score) as max_performance,
+                MIN(ft.performance_score) as min_performance,
+                AVG(ft.heart_rate) as avg_hr,
+                AVG(ft.spo2) as avg_spo2,
+                AVG(CAST(ft.stress_level AS FLOAT)) as avg_stress
+            FROM users u
+            LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
+            LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id 
+                AND ft.record_timestamp BETWEEN :start AND :end
+            WHERE u.role_id != (SELECT role_id FROM roles WHERE role_name = 'administrator' LIMIT 1)
+            GROUP BY u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position
+            ORDER BY avg_performance DESC
+        """), {"start": d_start, "end": d_end}).fetchall()
         
-        if float(r[11]) if r[11] else 0 > 35:
-            notes = "Повышенный стресс" if notes else "Повышенный стресс"
+        crew_list = []
+        total_performance = 0
+        at_risk_count = 0
+        critical_count = 0
         
-        crew_list.append({
-            "fio": f"{r[2]} {r[1]}",
-            "position": r[4] or "Прочее",
-            "total_flights": r[5] or 0,
-            "performance": round(avg_perf, 1),
-            "min_performance": round(float(r[8]) or 0, 1),
-            "avg_hr": round(float(r[9]) or 0),
-            "status": status,
-            "notes": notes
-        })
-    
-    avg_fleet = round(total_performance / len(crew_stats)) if crew_stats else 0
-    
-    ai_comment = f"Анализ ИИ за период {d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}: "
-    ai_comment += f"Обследовано {len(crew_stats)} членов экипажа. "
-    ai_comment += f"Средняя готовность флота: {avg_fleet}%. "
-    
-    if critical_count > 0:
-        ai_comment += f"КРИТИЧНО: {critical_count} сотрудников в состоянии повышенного риска. "
-    if at_risk_count > 0:
-        ai_comment += f"Уведомление: {at_risk_count} сотрудников требуют усиленного мониторинга. "
-    
-    ai_comment += "Рекомендуется провести дополнительные медицинские осмотры и скорректировать графики полетов для экипажа в зоне риска."
-    
-    return {
-        "summary": {
-            "total_crew": len(crew_stats),
-            "avg_performance": avg_fleet,
-            "at_risk_count": at_risk_count,
-            "critical_count": critical_count,
-            "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"
-        },
-        "crew_list": crew_list,
-        "ai_comment": ai_comment
-    }
+        for r in crew_stats:
+            avg_perf = float(r[6]) if r[6] else 0
+            total_performance += avg_perf
+            
+            status = "Оптимальный"
+            notes = ""
+            
+            # ИИ Анализ
+            if 0 < avg_perf < 60:
+                critical_count += 1
+                status = "⚠️ Критический"
+                notes = "Требуется обследование"
+            elif 0 < avg_perf < 75:
+                at_risk_count += 1
+                status = "⚠️ Риск"
+                notes = f"Повышенный пульс: {int(float(r[9]) or 0)}"
+            
+            # Защита от математических ошибок
+            spo2 = float(r[10]) if r[10] else 98
+            stress = float(r[11]) if r[11] else 0
+            
+            if spo2 < 94:
+                notes = "Низкий кислород" if not notes else f"{notes}, Гипоксия"
+            if stress > 35:
+                notes = "Стресс" if not notes else f"{notes}, Стресс"
+            
+            crew_list.append({
+                "fio": f"{r[2]} {r[1]}",
+                "position": r[4] or "Резерв",
+                "total_flights": r[5] or 0,
+                "performance": round(avg_perf, 1),
+                "min_performance": round(float(r[8]) or 0, 1),
+                "avg_hr": round(float(r[9]) or 0),
+                "status": status,
+                "notes": notes
+            })
+        
+        avg_fleet = round(total_performance / len(crew_stats)) if crew_stats else 0
+        
+        ai_comment = f"Анализ ИИ: Обследовано {len(crew_stats)} членов экипажа. Средняя готовность флота: {avg_fleet}%. "
+        if critical_count > 0:
+            ai_comment += f"КРИТИЧНО: {critical_count} чел. в состоянии риска. "
+        
+        return {
+            "summary": {
+                "total_crew": len(crew_stats),
+                "avg_performance": avg_fleet,
+                "at_risk_count": at_risk_count,
+                "critical_count": critical_count,
+                "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"
+            },
+            "crew_list": crew_list,
+            "ai_comment": ai_comment
+        }
+    except Exception as e:
+        # Теперь сервер не упадет тихо, а скажет нам причину!
+        logger.error(f"Report Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/admin/performance-trends", tags=["Администратор"])
 def get_performance_trends(

@@ -1,11 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/config';
-import { UserPlus, Users, Search, TrendingUp, Trash2, Edit2, Eye, BarChart3, Filter } from 'lucide-react';
+import { 
+  UserPlus, Users, Search, TrendingUp, Trash2, Edit2, Eye, BarChart3, 
+  LogOut, ServerCrash, Loader2, CalendarRange, HeartPulse, BrainCircuit, ShieldAlert
+} from 'lucide-react';
+
+// Заглушка для пустых данных
+const EmptyState = ({ message }) => (
+  <div className="text-center py-20 bg-white dark:bg-slate-800 rounded-3xl shadow-lg border border-slate-200 dark:border-slate-700">
+    <ServerCrash size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-4" />
+    <p className="font-bold text-slate-500 dark:text-slate-400">{message}</p>
+  </div>
+);
 
 const AdminPage = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState('users'); // users, reports, trends, audit
+  const [activeTab, setActiveTab] = useState('users');
   const [staff, setStaff] = useState([]);
-  const [reports, setReports] = useState([]);
+  const [reports, setReports] = useState({});
   const [trends, setTrends] = useState({});
   const [auditLogs, setAuditLogs] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -16,151 +27,83 @@ const AdminPage = ({ user, onLogout }) => {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
   const [formData, setFormData] = useState({
-    email: '',
-    first_name: '',
-    last_name: '',
-    patronymic: '',
-    password: '',
-    role_id: '2', // crew_member по умолчанию
-    baseline_hr: 75
+    email: '', first_name: '', last_name: '', patronymic: '',
+    password: '', role_id: '2', baseline_hr: 75
   });
 
-  // Загрузка всех пользователей
+  // Загрузка данных при переключении вкладок
   useEffect(() => {
-    if (activeTab === 'users') {
-      loadStaff();
-    }
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        if (activeTab === 'users') {
+          const res = await api.get('/admin/staff');
+          setStaff(res.data);
+        } else if (activeTab === 'trends') {
+          const res = await api.get('/admin/performance-trends');
+          setTrends(res.data);
+        } else if (activeTab === 'audit') {
+          const res = await api.get('/admin/medical-audit');
+          setAuditLogs(res.data);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
   }, [activeTab]);
 
-  const loadStaff = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get('/admin/staff');
-      setStaff(res.data);
-    } catch (error) {
-      console.error('Ошибка при загрузке персонала:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Загрузка расширенных отчетов
-  useEffect(() => {
-    if (activeTab === 'reports') {
-      loadReports();
-    }
-  }, [activeTab, dateRange]);
-
+  // Отдельная загрузка отчетов по кнопке
   const loadReports = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
       const params = {};
       if (dateRange.start) params.start_date = dateRange.start;
       if (dateRange.end) params.end_date = dateRange.end;
       const res = await api.get('/admin/extended-reports', { params });
       setReports(res.data);
     } catch (error) {
-      console.error('Ошибка при загрузке отчетов:', error);
+      console.error('Ошибка отчетов:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Загрузка трендов работоспособности
+  // Инициализация отчетов при первом заходе на вкладку
   useEffect(() => {
-    if (activeTab === 'trends') {
-      loadTrends();
+    if (activeTab === 'reports' && !reports.summary) {
+      loadReports();
     }
   }, [activeTab]);
 
-  const loadTrends = async () => {
+  const handleSaveUser = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/admin/performance-trends');
-      setTrends(res.data);
-    } catch (error) {
-      console.error('Ошибка при загрузке трендов:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Загрузка аудита медработников
-  useEffect(() => {
-    if (activeTab === 'audit') {
-      loadAudit();
-    }
-  }, [activeTab]);
-
-  const loadAudit = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get('/admin/medical-audit');
-      setAuditLogs(res.data);
-    } catch (error) {
-      console.error('Ошибка при загрузке аудита:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Создание нового пользователя
-  const handleCreateUser = async () => {
-    if (!formData.email || !formData.first_name || !formData.last_name) {
-      alert('Заполните обязательные поля');
-      return;
-    }
-    try {
-      setLoading(true);
-      await api.post('/admin/create_user', formData);
-      alert('Сотрудник успешно добавлен');
-      setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_id: '2', baseline_hr: 75 });
-      setShowModal(false);
-      loadStaff();
-    } catch (error) {
-      alert('Ошибка при создании сотрудника: ' + (error.response?.data?.detail || error.message));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Редактирование пользователя
-  const handleEditUser = async (userId) => {
-    if (!editingUser) {
-      // Выбрали пользователя для редактирования
-      const user = staff.find(s => s.user_id === userId);
-      setEditingUser(user);
-      setFormData(user);
-      setShowModal(true);
-    } else {
-      // Сохраняем изменения
-      try {
-        setLoading(true);
-        await api.put(`/admin/update_user/${userId}`, formData);
-        alert('Данные сотрудника обновлены');
-        setShowModal(false);
-        setEditingUser(null);
-        loadStaff();
-      } catch (error) {
-        alert('Ошибка при обновлении: ' + (error.response?.data?.detail || error.message));
-      } finally {
-        setLoading(false);
+      if (editingUser) {
+        await api.put(`/admin/update_user/${editingUser.user_id}`, formData);
+      } else {
+        await api.post('/admin/create_user', formData);
       }
+      setShowModal(false);
+      setEditingUser(null);
+      const res = await api.get('/admin/staff');
+      setStaff(res.data);
+    } catch (error) {
+      alert('Ошибка: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Удаление пользователя
   const handleDeleteUser = async (userId) => {
-    if (window.confirm('Вы уверены? Это действие необратимо.')) {
+    if (window.confirm('Удалить сотрудника из системы?')) {
       try {
-        setLoading(true);
         await api.delete(`/admin/delete_user/${userId}`);
-        alert('Сотрудник удален');
-        loadStaff();
+        setStaff(staff.filter(s => s.user_id !== userId));
       } catch (error) {
-        alert('Ошибка при удалении: ' + (error.response?.data?.detail || error.message));
-      } finally {
-        setLoading(false);
+        alert('Ошибка: ' + (error.response?.data?.detail || error.message));
       }
     }
   };
@@ -172,376 +115,241 @@ const AdminPage = ({ user, onLogout }) => {
   });
 
   return (
-    <div className="p-10 bg-slate-50 min-h-screen">
-      <h1 className="text-3xl font-black text-slate-800 mb-8">⚙️ АДМИНИСТРИРОВАНИЕ СИСТЕМЫ</h1>
-
-      {/* ВКЛАДКИ */}
-      <div className="flex gap-4 mb-8">
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`px-6 py-3 rounded-lg font-bold transition ${activeTab === 'users' ? 'bg-blue-600 text-white shadow-lg' : 'bg-white text-slate-700 border border-slate-300'}`}
-        >
-          <Users className="inline mr-2" size={20} /> Реестр пользователей
-        </button>
-        <button
-          onClick={() => setActiveTab('reports')}
-          className={`px-6 py-3 rounded-lg font-bold transition ${activeTab === 'reports' ? 'bg-green-600 text-white shadow-lg' : 'bg-white text-slate-700 border border-slate-300'}`}
-        >
-          <BarChart3 className="inline mr-2" size={20} /> Отчеты
-        </button>
-        <button
-          onClick={() => setActiveTab('trends')}
-          className={`px-6 py-3 rounded-lg font-bold transition ${activeTab === 'trends' ? 'bg-orange-600 text-white shadow-lg' : 'bg-white text-slate-700 border border-slate-300'}`}
-        >
-          <TrendingUp className="inline mr-2" size={20} /> Тренды
-        </button>
-        <button
-          onClick={() => setActiveTab('audit')}
-          className={`px-6 py-3 rounded-lg font-bold transition ${activeTab === 'audit' ? 'bg-red-600 text-white shadow-lg' : 'bg-white text-slate-700 border border-slate-300'}`}
-        >
-          <Eye className="inline mr-2" size={20} /> Аудит
-        </button>
-      </div>
-
-      {/* ВКЛАДКА: РЕЕСТР ПОЛЬЗОВАТЕЛЕЙ */}
-      {activeTab === 'users' && (
-        <div className="space-y-6">
-          <div className="flex gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-3 text-slate-400" size={20} />
-              <input
-                type="text"
-                placeholder="Поиск по ФИО..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <select
-              value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value)}
-              className="px-4 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">Все роли</option>
-              <option value="administrator">Администратор</option>
-              <option value="crew_member">Экипаж</option>
-              <option value="dispatcher">Диспетчер</option>
-              <option value="medical_worker">Медработник</option>
-            </select>
-            <button
-              onClick={() => {
-                setEditingUser(null);
-                setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_id: '2', baseline_hr: 75 });
-                setShowModal(true);
-              }}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition"
-            >
-              <UserPlus className="inline mr-2" size={20} /> Добавить
-            </button>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
+      
+      {/* --- HEADER --- */}
+      <header className="sticky top-0 z-20 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 p-6 px-10 flex justify-between items-center shadow-sm">
+        <h1 className="text-2xl font-black uppercase tracking-tight flex items-center gap-3">
+          <div className="p-2 bg-blue-600 rounded-lg text-white"><Users size={24} /></div>
+          Администрирование <span className="text-blue-600">МС-21</span>
+        </h1>
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4 bg-slate-100 dark:bg-slate-800 p-2 pr-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+             <div className="w-12 h-12 bg-slate-800 dark:bg-slate-700 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-inner">{user.fio[0]}</div>
+             <div className="text-left leading-tight">
+                <p className="font-bold text-sm text-slate-800 dark:text-white">{user.fio}</p>
+                <p className="text-[9px] text-blue-600 dark:text-blue-400 font-black uppercase tracking-widest">{user.position}</p>
+             </div>
           </div>
-
-          {/* ТАБЛИЦА ПОЛЬЗОВАТЕЛЕЙ */}
-          <div className="bg-white rounded-3xl shadow-xl overflow-hidden">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-900 text-white">
-                <tr>
-                  <th className="p-4">ФИО</th>
-                  <th className="p-4">Email</th>
-                  <th className="p-4">Роль</th>
-                  <th className="p-4">Базис ЧСС</th>
-                  <th className="p-4 text-center">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredStaff.map((s, i) => (
-                  <tr key={i} className="border-b hover:bg-slate-50 transition">
-                    <td className="p-4 font-bold">{s.last_name} {s.first_name} {s.patronymic}</td>
-                    <td className="p-4 text-slate-600">{s.email}</td>
-                    <td className="p-4">
-                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
-                        {s.role_name}
-                      </span>
-                    </td>
-                    <td className="p-4 font-mono">{s.baseline_hr} bpm</td>
-                    <td className="p-4 text-center space-x-2">
-                      <button
-                        onClick={() => handleEditUser(s.user_id)}
-                        className="px-3 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition inline-flex items-center"
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteUser(s.user_id)}
-                        className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition inline-flex items-center"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <button onClick={onLogout} className="p-4 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white dark:bg-rose-950/30 dark:text-rose-500 dark:hover:bg-rose-600 dark:hover:text-white rounded-2xl font-bold transition-all shadow-sm flex items-center gap-2">
+            <LogOut size={20} /> <span className="uppercase text-xs tracking-widest hidden md:block">Выход</span>
+          </button>
         </div>
-      )}
+      </header>
 
-      {/* ВКЛАДКА: ОТЧЕТЫ */}
-      {activeTab === 'reports' && (
-        <div className="space-y-6">
-          <div className="flex gap-4 bg-white p-6 rounded-lg shadow">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-2">Начальная дата</label>
-              <input
-                type="datetime-local"
-                value={dateRange.start}
-                onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-                className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-2">Конечная дата</label>
-              <input
-                type="datetime-local"
-                value={dateRange.end}
-                onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-                className="px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-            <button
-              onClick={loadReports}
-              className="self-end px-6 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 transition"
-            >
-              Загрузить отчет
-            </button>
-          </div>
-
-          {reports.summary && (
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg">
-                <div className="text-3xl font-bold">{reports.summary.total_crew}</div>
-                <div className="text-sm opacity-90">Всего экипажа</div>
-              </div>
-              <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow-lg">
-                <div className="text-3xl font-bold">{reports.summary.avg_performance}%</div>
-                <div className="text-sm opacity-90">Средняя готовность</div>
-              </div>
-              <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-lg shadow-lg">
-                <div className="text-3xl font-bold">{reports.summary.at_risk_count}</div>
-                <div className="text-sm opacity-90">В зоне риска</div>
-              </div>
-              <div className="bg-gradient-to-br from-red-500 to-red-600 text-white p-6 rounded-lg shadow-lg">
-                <div className="text-3xl font-bold">{reports.summary.critical_count}</div>
-                <div className="text-sm opacity-90">Критический статус</div>
-              </div>
-            </div>
-          )}
-
-          {reports.crew_list && (
-            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-              <div className="bg-slate-900 text-white p-4 font-bold">ДЕТАЛЬНЫЙ ОТЧЕТ ПО ЭКИПАЖУ</div>
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-100 border-b">
-                  <tr>
-                    <th className="p-4">ФИО</th>
-                    <th className="p-4">Роль</th>
-                    <th className="p-4">Средняя готовность</th>
-                    <th className="p-4">Статус</th>
-                    <th className="p-4">Замечания</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.crew_list.map((crew, i) => (
-                    <tr key={i} className="border-b hover:bg-slate-50">
-                      <td className="p-4 font-bold">{crew.fio}</td>
-                      <td className="p-4">{crew.position}</td>
-                      <td className="p-4">
-                        <span className={`px-3 py-1 rounded text-xs font-bold ${crew.performance >= 80 ? 'bg-green-100 text-green-800' : crew.performance >= 60 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
-                          {crew.performance}%
-                        </span>
-                      </td>
-                      <td className="p-4">{crew.status}</td>
-                      <td className="p-4 text-slate-600 text-xs">{crew.notes}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {reports.ai_comment && (
-            <div className="bg-blue-50 border-l-4 border-blue-500 p-6 rounded">
-              <div className="font-bold text-slate-800 mb-2">💡 Аналитика ИИ:</div>
-              <div className="text-slate-700">{reports.ai_comment}</div>
-            </div>
-          )}
+      <main className="flex-1 p-10 max-w-[1600px] mx-auto w-full space-y-8">
+        
+        {/* --- TABS --- */}
+        <div className="flex gap-4 bg-white dark:bg-slate-800 p-2 rounded-2xl border border-slate-200 dark:border-slate-700 max-w-max shadow-sm">
+          <button onClick={() => setActiveTab('users')} className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${activeTab === 'users' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}><Users size={18}/> Реестр</button>
+          <button onClick={() => setActiveTab('reports')} className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${activeTab === 'reports' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}><BarChart3 size={18}/> Сводные отчеты</button>
+          <button onClick={() => setActiveTab('trends')} className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${activeTab === 'trends' ? 'bg-amber-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}><TrendingUp size={18}/> ИИ Тренды</button>
+          <button onClick={() => setActiveTab('audit')} className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${activeTab === 'audit' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}><Eye size={18}/> Аудит действий</button>
         </div>
-      )}
 
-      {/* ВКЛАДКА: ТРЕНДЫ */}
-      {activeTab === 'trends' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-6">
-            <div className="bg-white p-6 rounded-lg shadow-lg">
-              <div className="font-bold text-slate-800 mb-4">📊 Тренд готовности за 30 дней</div>
-              {trends.daily_average && (
-                <div className="space-y-2">
-                  {trends.daily_average.map((item, i) => (
-                    <div key={i} className="flex items-center justify-between">
-                      <span className="text-sm text-slate-600">{item.date}</span>
-                      <div className="flex items-center gap-2 flex-1 ml-4">
-                        <div className="h-2 bg-slate-200 rounded-full flex-1 overflow-hidden">
-                          <div
-                            className="h-full bg-green-500 rounded-full"
-                            style={{ width: `${item.avg_score}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-sm font-bold text-slate-800">{item.avg_score}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white p-6 rounded-lg shadow-lg">
-              <div className="font-bold text-slate-800 mb-4">⚠️ Попадений в зоны риска</div>
-              {trends.risk_events && (
-                <div className="space-y-3">
-                  {trends.risk_events.map((risk, i) => (
-                    <div key={i} className="bg-orange-50 border-l-4 border-orange-400 p-3 rounded">
-                      <div className="font-bold text-orange-800">{risk.crew_fio}</div>
-                      <div className="text-xs text-orange-700 mt-1">{risk.reason}</div>
-                      <div className="text-xs text-slate-600 mt-1">{risk.date}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {trends.forecast && (
-            <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow-lg">
-              <div className="font-bold mb-2">🔮 Прогноз ИИ на неделю:</div>
-              <div className="text-sm opacity-90">{trends.forecast}</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ВКЛАДКА: АУДИТ */}
-      {activeTab === 'audit' && (
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="bg-slate-900 text-white p-4 font-bold">АУДИТ ДЕЙСТВИЙ МЕДИЦИНСКИХ РАБОТНИКОВ</div>
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-100 border-b">
-              <tr>
-                <th className="p-4">Дата/Время</th>
-                <th className="p-4">Медработник</th>
-                <th className="p-4">Действие</th>
-                <th className="p-4">Описание</th>
-                <th className="p-4">Результат</th>
-              </tr>
-            </thead>
-            <tbody>
-              {auditLogs.map((log, i) => (
-                <tr key={i} className="border-b hover:bg-slate-50 transition">
-                  <td className="p-4 font-mono text-xs">{log.timestamp}</td>
-                  <td className="p-4 font-bold">{log.medical_worker_fio}</td>
-                  <td className="p-4">
-                    <span className={`px-3 py-1 rounded text-xs font-bold ${log.action === 'upload' ? 'bg-blue-100 text-blue-800' : log.action === 'update' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
-                      {log.action_label}
-                    </span>
-                  </td>
-                  <td className="p-4 text-slate-600 text-xs">{log.description}</td>
-                  <td className="p-4">
-                    <span className={`px-3 py-1 rounded text-xs font-bold ${log.result === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                      {log.result === 'success' ? 'Успешно' : 'Ошибка'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* МОДАЛЬНОЕ ОКНО СОЗДАНИЯ/РЕДАКТИРОВАНИЯ */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md w-full">
-            <h2 className="text-2xl font-bold mb-6">{editingUser ? 'Редактирование' : 'Добавление сотрудника'}</h2>
-            <div className="space-y-4">
-              <input
-                type="email"
-                placeholder="Email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="text"
-                placeholder="Имя"
-                value={formData.first_name}
-                onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="text"
-                placeholder="Фамилия"
-                value={formData.last_name}
-                onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="text"
-                placeholder="Отчество"
-                value={formData.patronymic}
-                onChange={(e) => setFormData({ ...formData, patronymic: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              {!editingUser && (
-                <input
-                  type="password"
-                  placeholder="Пароль"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              )}
-              <select
-                value={formData.role_id}
-                onChange={(e) => setFormData({ ...formData, role_id: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="1">Администратор</option>
-                <option value="2">Экипаж</option>
-                <option value="3">Диспетчер</option>
-                <option value="4">Медработник</option>
+        {/* --- Вкладка: РЕЕСТР ПОЛЬЗОВАТЕЛЕЙ --- */}
+        {activeTab === 'users' && (
+          <div className="animate-in fade-in duration-300">
+            <div className="flex gap-4 mb-6 bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
+              <div className="relative flex-1">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                <input type="text" placeholder="Поиск сотрудника..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+              </div>
+              <select value={filterRole} onChange={e => setFilterRole(e.target.value)} className="px-6 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-300 outline-none">
+                <option value="all">Все должности</option>
+                <option value="administrator">Администраторы</option>
+                <option value="crew_member">Летный экипаж</option>
+                <option value="dispatcher">Диспетчеры ЦУП</option>
               </select>
-              <input
-                type="number"
-                placeholder="Базис ЧСС (bpm)"
-                value={formData.baseline_hr}
-                onChange={(e) => setFormData({ ...formData, baseline_hr: parseInt(e.target.value) })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <button onClick={() => { setEditingUser(null); setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_id: '2', baseline_hr: 75 }); setShowModal(true); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg transition-all">
+                <UserPlus size={20}/> Добавить
+              </button>
+            </div>
+
+            {loading ? <div className="text-center py-20"><Loader2 className="animate-spin inline-block text-blue-500" size={48}/></div> : filteredStaff.length > 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-[2rem] shadow-xl overflow-hidden border border-slate-200 dark:border-slate-700">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                    <tr><th className="px-8 py-6">ФИО</th><th className="px-8 py-6">Email</th><th className="px-8 py-6">Должность</th><th className="px-8 py-6 text-center">Норма ЧСС</th><th className="px-8 py-6 text-right">Управление</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                    {filteredStaff.map((s, i) => (
+                      <tr key={i} className="hover:bg-blue-50 dark:hover:bg-slate-700/50 transition-colors">
+                        <td className="px-8 py-5 font-bold text-slate-800 dark:text-slate-200">{s.last_name} {s.first_name}</td>
+                        <td className="px-8 py-5 text-sm text-slate-500">{s.email}</td>
+                        <td className="px-8 py-5"><span className="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase tracking-widest">{s.position || s.role_name}</span></td>
+                        <td className="px-8 py-5 text-center font-mono font-bold text-rose-500 flex items-center justify-center gap-2"><HeartPulse size={16}/> {s.baseline_hr}</td>
+                        <td className="px-8 py-5 text-right space-x-3">
+                          <button onClick={() => { setEditingUser(s); setFormData(s); setShowModal(true); }} className="p-2 bg-amber-100 text-amber-600 rounded-lg hover:bg-amber-200 transition"><Edit2 size={16} /></button>
+                          <button onClick={() => handleDeleteUser(s.user_id)} className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200 transition"><Trash2 size={16} /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <EmptyState message="Сотрудники не найдены. Измените параметры поиска." />}
+          </div>
+        )}
+
+        {/* --- Вкладка: ОТЧЕТЫ --- */}
+        {activeTab === 'reports' && (
+          <div className="animate-in fade-in duration-300 space-y-8">
+            <div className="flex items-end gap-4 bg-white dark:bg-slate-800 p-6 rounded-[2rem] shadow-sm border border-slate-200 dark:border-slate-700">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Начало периода</label>
+                <input type="datetime-local" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm outline-none"/>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-2">Конец периода</label>
+                <input type="datetime-local" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm outline-none"/>
+              </div>
+              <button onClick={loadReports} className="px-8 py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition flex items-center gap-2 shadow-lg"><CalendarRange size={18}/> Запросить отчет</button>
+            </div>
+
+            {loading ? <div className="text-center py-20"><Loader2 className="animate-spin inline-block text-emerald-500" size={48}/></div> : reports.summary ? (
+              <>
+                <div className="grid grid-cols-4 gap-6">
+                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-blue-500 shadow-sm"><p className="text-slate-400 text-xs font-black uppercase mb-1">Всего экипажа</p><h4 className="text-5xl font-black">{reports.summary.total_crew}</h4></div>
+                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-emerald-500 shadow-sm"><p className="text-slate-400 text-xs font-black uppercase mb-1">Готовность флота</p><h4 className="text-5xl font-black text-emerald-500">{reports.summary.avg_performance}%</h4></div>
+                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-amber-500 shadow-sm"><p className="text-slate-400 text-xs font-black uppercase mb-1">В зоне риска</p><h4 className="text-5xl font-black text-amber-500">{reports.summary.at_risk_count}</h4></div>
+                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border-b-4 border-rose-500 shadow-sm"><p className="text-slate-400 text-xs font-black uppercase mb-1">Критический статус</p><h4 className="text-5xl font-black text-rose-500">{reports.summary.critical_count}</h4></div>
+                </div>
+
+                {reports.ai_comment && (
+                  <div className="bg-blue-50 dark:bg-slate-800 border-l-8 border-blue-500 p-8 rounded-[2rem] shadow-sm">
+                    <h3 className="text-xl font-black uppercase mb-2 flex items-center gap-3"><BrainCircuit className="text-blue-500"/> Резюме ИИ-Агента</h3>
+                    <p className="text-lg text-slate-700 dark:text-slate-300 font-medium leading-relaxed">{reports.ai_comment}</p>
+                  </div>
+                )}
+
+                <div className="bg-white dark:bg-slate-800 rounded-[2rem] shadow-xl overflow-hidden border border-slate-200 dark:border-slate-700">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                      <tr><th className="px-8 py-6">Сотрудник</th><th className="px-8 py-6">Должность</th><th className="px-8 py-6 text-center">Индекс ИИ</th><th className="px-8 py-6">Замечания системы</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                      {reports.crew_list.map((c, i) => (
+                        <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                          <td className="px-8 py-5 font-bold">{c.fio}</td>
+                          <td className="px-8 py-5 text-sm text-slate-500">{c.position}</td>
+                          <td className="px-8 py-5 text-center"><span className={`px-4 py-1.5 rounded-xl text-xs font-black ${c.performance > 70 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{c.performance}%</span></td>
+                          <td className="px-8 py-5 text-sm font-medium text-slate-600 dark:text-slate-400">{c.notes || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : <EmptyState message="Укажите период и нажмите «Запросить отчет»" />}
+          </div>
+        )}
+
+        {/* --- Вкладка: ТРЕНДЫ ИИ --- */}
+        {activeTab === 'trends' && (
+          <div className="animate-in fade-in duration-300 space-y-8">
+            {loading ? <div className="text-center py-20"><Loader2 className="animate-spin inline-block text-amber-500" size={48}/></div> : trends.daily_average ? (
+              <>
+                {trends.forecast && (
+                  <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white p-8 rounded-[2.5rem] shadow-xl">
+                    <h3 className="text-2xl font-black uppercase tracking-tight flex items-center gap-3 mb-2"><BrainCircuit size={28}/> Прогноз ИИ на неделю</h3>
+                    <p className="text-lg font-medium opacity-90">{trends.forecast}</p>
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                  <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] shadow-xl border border-slate-200 dark:border-slate-700">
+                    <h3 className="text-xl font-black uppercase mb-8 text-slate-800 dark:text-white">Динамика флота (30 дней)</h3>
+                    <div className="space-y-4">
+                      {trends.daily_average.map((item, i) => (
+                        <div key={i} className="flex items-center gap-4">
+                          <span className="w-12 text-xs font-bold text-slate-400">{item.date}</span>
+                          <div className="flex-1 h-3 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${item.avg_score > 75 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${item.avg_score}%` }}></div>
+                          </div>
+                          <span className="w-10 text-right font-black text-sm">{item.avg_score}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] shadow-xl border border-slate-200 dark:border-slate-700">
+                    <h3 className="text-xl font-black uppercase mb-8 text-slate-800 dark:text-white flex items-center gap-3"><ShieldAlert className="text-rose-500"/> Инциденты (Зона риска)</h3>
+                    <div className="space-y-4">
+                      {trends.risk_events && trends.risk_events.length > 0 ? trends.risk_events.map((risk, i) => (
+                        <div key={i} className="p-4 bg-rose-50 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/50 rounded-2xl">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-bold text-rose-700 dark:text-rose-400">{risk.crew_fio}</span>
+                            <span className="text-xs font-mono text-rose-400">{risk.date}</span>
+                          </div>
+                          <p className="text-sm text-rose-600 dark:text-rose-300">{risk.reason}</p>
+                        </div>
+                      )) : <p className="text-emerald-500 font-bold">Инцидентов не зафиксировано.</p>}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : <EmptyState message="Тренд ИИ пока недоступен" />}
+          </div>
+        )}
+
+        {/* --- Вкладка: АУДИТ --- */}
+        {activeTab === 'audit' && (
+          <div className="animate-in fade-in duration-300">
+            {loading ? <div className="text-center py-20"><Loader2 className="animate-spin inline-block text-purple-500" size={48}/></div> : auditLogs.length > 0 ? (
+              <div className="bg-white dark:bg-slate-800 rounded-[2rem] shadow-xl overflow-hidden border border-slate-200 dark:border-slate-700">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                    <tr><th className="px-8 py-6">Дата и Время</th><th className="px-8 py-6">Сотрудник / Система</th><th className="px-8 py-6">Действие</th><th className="px-8 py-6">Событие</th><th className="px-8 py-6">Статус</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                    {auditLogs.map((log, i) => (
+                      <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                        <td className="px-8 py-5 font-mono text-xs text-slate-500">{log.timestamp}</td>
+                        <td className="px-8 py-5 font-bold text-slate-700 dark:text-slate-300">{log.medical_worker_fio}</td>
+                        <td className="px-8 py-5"><span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase bg-purple-100 text-purple-700">{log.action_label}</span></td>
+                        <td className="px-8 py-5 text-sm text-slate-600 dark:text-slate-400">{log.description}</td>
+                        <td className="px-8 py-5"><span className="text-emerald-500 font-bold text-sm">✓ {log.result}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <EmptyState message="В журнале аудита пока нет записей" />}
+          </div>
+        )}
+      </main>
+
+      {/* --- МОДАЛКА --- */}
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-8 max-w-md w-full border border-slate-200 dark:border-slate-700">
+            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">{editingUser ? 'Редактировать' : 'Новый сотрудник'}</h2>
+            <div className="space-y-4">
+              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Имя</label><input type="text" value={formData.first_name} onChange={e => setFormData({...formData, first_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фамилия</label><input type="text" value={formData.last_name} onChange={e => setFormData({...formData, last_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              </div>
+              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Отчество</label><input type="text" value={formData.patronymic} onChange={e => setFormData({...formData, patronymic: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              {!editingUser && <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Пароль</label><input type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Роль в системе</label>
+                  <select value={formData.role_id} onChange={e => setFormData({...formData, role_id: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700">
+                    <option value="1">Администратор</option>
+                    <option value="2">Летный экипаж</option>
+                    <option value="3">Диспетчер ЦУП</option>
+                    <option value="4">Медработник</option>
+                  </select>
+                </div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Базис ЧСС</label><input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              </div>
             </div>
             <div className="flex gap-4 mt-8">
-              <button
-                onClick={() => {
-                  setShowModal(false);
-                  setEditingUser(null);
-                }}
-                className="flex-1 px-4 py-2 bg-slate-300 text-slate-800 rounded-lg font-bold hover:bg-slate-400 transition"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={() => editingUser ? handleEditUser(editingUser.user_id) : handleCreateUser()}
-                disabled={loading}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition disabled:opacity-50"
-              >
-                {loading ? 'Загрузка...' : editingUser ? 'Сохранить' : 'Добавить'}
+              <button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition">Отмена</button>
+              <button onClick={handleSaveUser} disabled={loading} className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50">
+                {loading ? <Loader2 className="animate-spin mx-auto" /> : 'Сохранить'}
               </button>
             </div>
           </div>
@@ -550,4 +358,5 @@ const AdminPage = ({ user, onLogout }) => {
     </div>
   );
 };
+
 export default AdminPage;
