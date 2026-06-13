@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/config';
 import { 
-  UserPlus, Users, Search, TrendingUp, Trash2, Edit2, Eye, BarChart3, 
+  UserPlus, Users, Search, TrendingUp, Trash2, Edit2, Eye, EyeOff, BarChart3, 
   LogOut, ServerCrash, Loader2, CalendarRange, HeartPulse, BrainCircuit, ShieldAlert
 } from 'lucide-react';
 
@@ -24,6 +24,7 @@ const AdminPage = ({ user, onLogout }) => {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
   // 1. ИСПОЛЬЗУЕМ role_name ВМЕСТО role_id
@@ -336,7 +337,11 @@ const AdminPage = ({ user, onLogout }) => {
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
           <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-8 max-w-md w-full border border-slate-200 dark:border-slate-700">
-            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">{editingUser ? 'Редактировать' : 'Новый сотрудник'}</h2>
+            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight flex items-center gap-3">
+              {editingUser ? <Edit2 className="text-blue-500"/> : <UserPlus className="text-blue-500"/>}
+              {editingUser ? 'Редактировать' : 'Новый сотрудник'}
+            </h2>
+            
             <div className="space-y-4">
               <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Email</label>
               <input type="email" autoComplete="new-password" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
@@ -351,8 +356,15 @@ const AdminPage = ({ user, onLogout }) => {
               <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Отчество</label>
               <input type="text" autoComplete="new-password" value={formData.patronymic} onChange={e => setFormData({...formData, patronymic: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
               
-              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">{editingUser ? 'Новый пароль (оставьте пустым, если не меняете)' : 'Пароль'}</label>
-              <input type="password" autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">{editingUser ? 'Новый пароль (оставьте пустым)' : 'Пароль'}</label>
+                <div className="relative">
+                  <input type={showPassword ? "text" : "password"} autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700 pr-10"/>
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-[calc(50%+2px)] -translate-y-1/2 text-slate-400 hover:text-blue-500 transition-colors">
+                    {showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}
+                  </button>
+                </div>
+              </div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -368,10 +380,11 @@ const AdminPage = ({ user, onLogout }) => {
                 <input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
               </div>
             </div>
+            
             <div className="flex gap-4 mt-8">
-              <button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition">Отмена</button>
-              <button onClick={handleSaveUser} disabled={loading} className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50">
-                {loading ? <Loader2 className="animate-spin mx-auto" /> : 'Сохранить'}
+              <button onClick={() => { setShowModal(false); setShowPassword(false); }} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition">Отмена</button>
+              <button onClick={handleSaveUser} disabled={loading} className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                {loading ? <><Loader2 className="animate-spin" size={20} /> Сохранение...</> : 'Сохранить'}
               </button>
             </div>
           </div>
