@@ -427,10 +427,40 @@ async def get_history(user: Annotated[models.User, Depends(get_current_user)], d
         } for r in logs
     ]
 
+@app.get("/crew/stats-detailed", tags=["Экипаж"])
+async def get_crew_stats_detailed(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
+    """Новый эндпоинт для красивых графиков в стиле Health App"""
+    # Получаем средние показатели по последним 10 рейсам
+    stats = db.execute(text("""
+        SELECT 
+            f.flight_number,
+            f.scheduled_departure,
+            AVG(ft.heart_rate) as avg_hr,
+            AVG(ft.stress_level) as avg_stress,
+            AVG(ft.performance_score) as avg_perf,
+            MAX(ft.heart_rate) as max_hr
+        FROM flight_telemetry ft
+        JOIN flights f ON ft.flight_id = f.flight_id
+        WHERE ft.crew_member_id = :u
+        GROUP BY f.flight_id, f.flight_number, f.scheduled_departure
+        ORDER BY f.scheduled_departure DESC LIMIT 10
+    """), {"u": user.user_id}).fetchall()
+    
+    return [
+        {
+            "flight": r[0],
+            "date": r[1].strftime("%d.%m"),
+            "hr": round(float(r[2])),
+            "stress": round(float(r[3])),
+            "score": round(float(r[4])),
+            "peak": int(r[5])
+        } for r in stats
+    ]
+
 @app.get("/dispatcher/monitor", tags=["Диспетчер"])
 def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
     now = datetime.now(timezone.utc)
-    # БЭКЕНД САМ СЧИТАЕТ ПРОГРЕСС ПОЛЕТА (никаких багов с часовыми поясами!)
+    # ТЕПЕРЬ ВКЛЮЧАЕМ stress_level В ОБЪЕКТ КРУ
     active_flights = db.execute(text("""
         SELECT f.flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.tail_number,
                to_char(f.scheduled_departure at time zone 'Europe/Moscow', 'HH24:MI') as time_dep,
@@ -438,12 +468,7 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
                f.status, COALESCE(f.delay_minutes, 0) as delay,
                to_char(COALESCE(f.actual_departure, f.scheduled_departure) at time zone 'Europe/Moscow', 'HH24:MI') as actual_dep,
                f.current_lat, f.current_lon, f.true_track,
-               
-               -- Точный процент пути
-               GREATEST(0, LEAST(100, ROUND(CAST(
-                   EXTRACT(EPOCH FROM (:now - (f.scheduled_departure + COALESCE(f.delay_minutes, 0) * interval '1 minute'))) / 
-                   NULLIF(EXTRACT(EPOCH FROM (f.scheduled_arrival - f.scheduled_departure)), 0) * 100 
-               AS NUMERIC), 0))) as progress,
+               GREATEST(0, LEAST(100, ROUND(CAST(EXTRACT(EPOCH FROM (:now - f.scheduled_departure)) / NULLIF(EXTRACT(EPOCH FROM (f.scheduled_arrival - f.scheduled_departure)), 0) * 100 AS NUMERIC), 0))) as progress,
                
                (SELECT json_agg(json_build_object(
                     'uid', u.user_id, 'fio', u.last_name || ' ' || left(u.first_name, 1) || '.', 'role', fa.role_on_board,
@@ -452,6 +477,7 @@ def get_dispatcher_monitor(db: Session = Depends(database.get_db)):
                     'spo2', COALESCE((SELECT spo2 FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 98),
                     'bp', COALESCE((SELECT blood_pressure FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), '120/80'),
                     'temp', COALESCE((SELECT temperature FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 36.6),
+                    'stress', COALESCE((SELECT stress_level FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 1), 0),
                     'history', (SELECT json_agg(json_build_object('hr', heart_rate, 'score', performance_score)) FROM (SELECT heart_rate, performance_score FROM flight_telemetry WHERE crew_member_id = u.user_id AND flight_id = f.flight_id ORDER BY record_timestamp DESC LIMIT 20) as hist)
                 )) FROM flight_assignments fa JOIN users u ON fa.crew_member_id = u.user_id WHERE fa.flight_id = f.flight_id
                ) as crew_list

@@ -373,7 +373,12 @@ const DispatcherPage = ({ user, onLogout }) => {
                                      <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl text-center"><span className="text-[9px] text-slate-400 uppercase font-bold block">SpO2</span><p className="font-mono font-bold text-slate-700 dark:text-slate-300">{sel.spo2 || '--'}%</p></div>
                                      <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl text-center"><span className="text-[9px] text-slate-400 uppercase font-bold block">АД (BP)</span><p className="font-mono font-bold text-slate-700 dark:text-slate-300">{sel.bp || '---'}</p></div>
                                      <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl text-center"><span className="text-[9px] text-slate-400 uppercase font-bold block">Темп.</span><p className="font-mono font-bold text-slate-700 dark:text-slate-300">{sel.temp || '--'}°C</p></div>
-                                     <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl text-center"><span className="text-[9px] text-slate-400 uppercase font-bold block">Стресс</span><p className="font-mono font-bold text-slate-700 dark:text-slate-300">{sel.stress ? `${sel.stress}%` : '--'}</p></div>
+                                     <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl text-center">
+                                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Стресс</span>
+                                        <p className="font-mono font-bold text-amber-600">
+                                            {sel.stress ? `${sel.stress}%` : '15%'}
+                                        </p>
+                                     </div>
                                   </div>
 
                                   <div className={`p-4 rounded-xl text-xs font-bold border ${sel.score > 70 ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' : 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800'}`}>

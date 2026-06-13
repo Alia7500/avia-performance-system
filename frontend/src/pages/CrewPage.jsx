@@ -155,57 +155,85 @@ const CrewPage = ({ user, onLogout }) => {
              </div>
           )}
 
-          {/* НОВАЯ ВЕРСИЯ: ПЕРСОНАЛЬНАЯ СТАТИСТИКА И ТРЕНДЫ */}
           {activeTab === 'history' && (
-            <div className="space-y-8 animate-in slide-in-from-left-10 duration-500">
-              
-              {/* Вывод ИИ-анализа */}
-              <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] shadow-xl border-l-8 border-blue-500">
-                 <h3 className="text-xl font-black uppercase mb-2">Общее заключение ИИ-Агента</h3>
-                 <p className="text-lg text-slate-600 dark:text-slate-300 font-medium leading-relaxed">
-                   {getTrendAnalysis()}
-                 </p>
-              </div>
+  <div className="space-y-8 animate-in slide-in-from-left-10 duration-500">
+    
+    {/* ИИ-ЗАКЛЮЧЕНИЕ */}
+    <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] shadow-xl border-l-8 border-blue-500">
+       <h3 className="text-xl font-black uppercase mb-2 flex items-center gap-3">
+         <BrainCircuit className="text-blue-500" /> Заключение ИИ-Агента МС-21
+       </h3>
+       <p className="text-lg text-slate-600 dark:text-slate-300 font-medium leading-relaxed">
+         {getTrendAnalysis()}
+       </p>
+    </div>
 
-              {/* График исторической динамики */}
-              <div className="bg-white dark:bg-slate-800 p-10 rounded-[3rem] shadow-xl">
-                 <h3 className="text-xl font-black mb-8 flex items-center gap-3 uppercase"><History className="text-blue-500"/> Динамика готовности (за месяц)</h3>
-                 <div className="h-72 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={[...medicalLogs].reverse()}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? "#334155" : "#e2e8f0"} />
-                        <XAxis dataKey="calculation_timestamp" tickFormatter={(v) => new Date(v).toLocaleDateString()} hide/>
-                        <YAxis domain={[0, 100]} />
-                        <Tooltip contentStyle={{backgroundColor: isDarkMode ? '#0f172a' : '#fff', borderRadius: '15px'}}/>
-                        <Bar dataKey="performance_score" radius={[8, 8, 0, 0]}>
-                          {medicalLogs.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.performance_score > 70 ? '#10b981' : '#f43f5e'} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                 </div>
-              </div>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      {/* ГРАФИК ПУЛЬСА (КАК В WATCH) */}
+      <div className="bg-white dark:bg-slate-800 p-8 rounded-[3rem] shadow-xl">
+         <h3 className="text-lg font-black mb-6 uppercase flex items-center gap-3"><Heart className="text-rose-500"/> Динамика ЧСС по рейсам</h3>
+         <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={[...telemetryHistory].reverse()}>
+                <defs>
+                  <linearGradient id="colorHr" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" hide />
+                <YAxis domain={['dataMin - 5', 'dataMax + 5']} />
+                <Tooltip />
+                <Area type="monotone" dataKey="hr" stroke="#f43f5e" strokeWidth={4} fill="url(#colorHr)" />
+              </AreaChart>
+            </ResponsiveContainer>
+         </div>
+      </div>
 
-              {/* Таблица истории загрузок */}
-              <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] shadow-xl overflow-hidden">
-                 <table className="w-full text-left">
-                    <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                      <tr><th className="px-8 py-5">Дата анализа</th><th className="px-8 py-5">Индекс</th><th className="px-8 py-5">Статус</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                      {medicalLogs.map((log, i) => (
-                        <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                          <td className="px-8 py-5 font-bold">{new Date(log.calculation_timestamp).toLocaleString()}</td>
-                          <td className={`px-8 py-5 font-black text-xl ${log.performance_score > 70 ? 'text-emerald-500' : 'text-rose-500'}`}>{Math.round(log.performance_score)}%</td>
-                          <td className="px-8 py-5"><span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase border border-slate-200 dark:border-slate-700">{log.performance_level}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                 </table>
-              </div>
-            </div>
-          )}
+      {/* ГРАФИК СТРЕССА */}
+      <div className="bg-white dark:bg-slate-800 p-8 rounded-[3rem] shadow-xl">
+         <h3 className="text-lg font-black mb-6 uppercase flex items-center gap-3"><Activity className="text-amber-500"/> Уровень стресса (ИИ-Анализ)</h3>
+         <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={[...telemetryHistory].reverse()}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="flight" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="stress" fill="#f59e0b" radius={[10, 10, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+         </div>
+      </div>
+    </div>
+
+    {/* ТАБЛИЦА ПОСЛЕДНИХ АНАЛИЗОВ */}
+    <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] shadow-xl overflow-hidden">
+       <div className="p-6 bg-slate-900 text-white font-bold uppercase tracking-widest text-sm">Журнал медицинских проверок</div>
+       <table className="w-full text-left">
+          <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+            <tr><th className="px-8 py-5">Дата</th><th className="px-8 py-5">Рейс</th><th className="px-8 py-5">Индекс</th><th className="px-8 py-5">Стресс</th><th className="px-8 py-5">Статус</th></tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+            {telemetryHistory.map((item, i) => (
+              <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <td className="px-8 py-5 font-bold">{item.date}</td>
+                <td className="px-8 py-5 font-black text-blue-600">{item.flight}</td>
+                <td className={`px-8 py-5 font-black text-xl ${item.score > 70 ? 'text-emerald-500' : 'text-rose-500'}`}>{item.score}%</td>
+                <td className="px-8 py-5 font-mono text-amber-600">{item.stress}%</td>
+                <td className="px-8 py-5">
+                  <span className={`px-3 py-1 rounded-lg text-[10px] font-black border ${item.score > 70 ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>
+                    {item.score > 70 ? 'НОРМА' : 'КОНТРОЛЬ'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+       </table>
+    </div>
+  </div>
+)}
         </div>
       </main>
     </div>
