@@ -480,11 +480,16 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
         d_start = parse_d(start_date, now - timedelta(days=30))
         d_end = parse_d(end_date, now)
 
-        # ИСПРАВЛЕНО: Убрана ошибка с сортировкой (убрано ORDER BY u.role_id)
+        # ИСПРАВЛЕНО: Вернул AS avg_performance и другие псевдонимы колонок!
         result = db.execute(text("""
-            SELECT u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position,
-                   COUNT(DISTINCT ft.flight_id), AVG(ft.performance_score), MIN(ft.performance_score),
-                   AVG(ft.heart_rate), AVG(ft.spo2), AVG(CAST(ft.stress_level AS FLOAT))
+            SELECT 
+                u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position,
+                COUNT(DISTINCT ft.flight_id) as total_flights,
+                AVG(ft.performance_score) as avg_performance,
+                MIN(ft.performance_score) as min_performance,
+                AVG(ft.heart_rate) as avg_hr, 
+                AVG(ft.spo2) as avg_spo2, 
+                AVG(CAST(ft.stress_level AS FLOAT)) as avg_stress
             FROM users u
             LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
             LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id AND ft.record_timestamp BETWEEN :s AND :e
@@ -498,6 +503,10 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
 
         for r in result:
             avg_perf = float(r[6]) if r[6] is not None else 0
+            min_perf = float(r[7]) if r[7] is not None else 0
+            avg_hr = float(r[8]) if r[8] is not None else 0
+            base_hr = int(r[3]) if r[3] is not None else 75
+            
             if r[5] == 0:
                 crew_list.append({"fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": 0, "performance": 0, "status": "Нет данных", "notes": "Полеты отсутствуют", "avg_hr": 0})
                 continue
@@ -508,9 +517,9 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
             
             crew_list.append({
                 "fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": r[5],
-                "performance": round(avg_perf, 1), "min_performance": round(float(r[7]) if r[7] else 0, 1),
-                "avg_hr": round(float(r[8]) if r[8] else 0), "status": status, 
-                "notes": f"ЧСС: {round(float(r[8]) if r[8] else 0)} (Норма {r[3]})" if avg_perf < 75 else "Штатно"
+                "performance": round(avg_perf, 1), "min_performance": round(min_perf, 1),
+                "avg_hr": round(avg_hr), "status": status, 
+                "notes": f"ЧСС: {round(avg_hr)} (Норма {base_hr})" if avg_perf < 75 else "Штатно"
             })
 
         avg_fleet = round(total_perf / processed) if processed > 0 else 0
