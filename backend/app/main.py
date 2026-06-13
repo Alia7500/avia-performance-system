@@ -456,20 +456,24 @@ async def get_dashboard(user: Annotated[models.User, Depends(get_current_user)],
 
 @app.get("/crew/my-flights", tags=["Экипаж"])
 async def get_my_flights(user: Annotated[models.User, Depends(get_current_user)], db: Session = Depends(database.get_db)):
+    now = datetime.now(timezone.utc)
+    # Показываем рейсы, которые были не более 24 часов назад и все будущие
     result = db.execute(text("""
         SELECT f.flight_number, f.departure_airport, f.arrival_airport, 
-               f.scheduled_departure, f.scheduled_arrival, fa.role_on_board
+               f.scheduled_departure, f.scheduled_arrival, fa.role_on_board, f.status
         FROM flights f
         JOIN flight_assignments fa ON f.flight_id = fa.flight_id
         WHERE fa.crew_member_id = :u
+          AND f.scheduled_departure >= :limit
         ORDER BY f.scheduled_departure ASC LIMIT 50
-    """), {"u": user.user_id}).fetchall()
+    """), {"u": user.user_id, "limit": now - timedelta(hours=24)}).fetchall()
     
     return [
         {
             "number": r[0], "from": r[1], "to": r[2], 
-            "dep": r[3].strftime("%d.%m %H:%M"), "arr": r[4].strftime("%d.%m %H:%M"),
-            "role": r[5]
+            "dep": r[3].strftime("%d.%m %H:%M"), 
+            "arr": r[4].strftime("%d.%m %H:%M"),
+            "role": r[5], "status": r[6]
         } for r in result
     ]
 
