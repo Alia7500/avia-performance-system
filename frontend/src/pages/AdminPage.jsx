@@ -26,9 +26,10 @@ const AdminPage = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
+  // 1. ИСПОЛЬЗУЕМ role_name ВМЕСТО role_id
   const [formData, setFormData] = useState({
     email: '', first_name: '', last_name: '', patronymic: '',
-    password: '', role_id: '2', baseline_hr: 75
+    password: '', role_name: 'crew_member', baseline_hr: 75
   });
 
   // Загрузка данных при переключении вкладок
@@ -75,6 +76,7 @@ const AdminPage = ({ user, onLogout }) => {
     }
   }, [activeTab]);
 
+  // 2. ФУНКЦИЯ СОХРАНЕНИЯ
   const handleSaveUser = async () => {
     try {
       setLoading(true);
@@ -85,6 +87,7 @@ const AdminPage = ({ user, onLogout }) => {
       }
       setShowModal(false);
       setEditingUser(null);
+      alert('Успешно сохранено!');
       const res = await api.get('/admin/staff');
       setStaff(res.data);
     } catch (error) {
@@ -92,6 +95,17 @@ const AdminPage = ({ user, onLogout }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 3. ФУНКЦИЯ ОТКРЫТИЯ МОДАЛКИ (чтобы пароль был пустым, а роль правильной)
+  const openEditModal = (userToEdit) => {
+    setEditingUser(userToEdit);
+    setFormData({
+      ...userToEdit,
+      password: '', // пароль не показываем в целях безопасности
+      role_name: userToEdit.role_name // передаем текстовое имя роли
+    });
+    setShowModal(true);
   };
 
   const handleDeleteUser = async (userId) => {
@@ -157,8 +171,9 @@ const AdminPage = ({ user, onLogout }) => {
                 <option value="administrator">Администраторы</option>
                 <option value="crew_member">Летный экипаж</option>
                 <option value="dispatcher">Диспетчеры ЦУП</option>
+                <option value="medical_worker">Медработники</option>
               </select>
-              <button onClick={() => { setEditingUser(null); setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_id: '2', baseline_hr: 75 }); setShowModal(true); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg transition-all">
+              <button onClick={() => { setEditingUser(null); setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_name: 'crew_member', baseline_hr: 75 }); setShowModal(true); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg transition-all">
                 <UserPlus size={20}/> Добавить
               </button>
             </div>
@@ -177,7 +192,7 @@ const AdminPage = ({ user, onLogout }) => {
                         <td className="px-8 py-5"><span className="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase tracking-widest">{s.position || s.role_name}</span></td>
                         <td className="px-8 py-5 text-center font-mono font-bold text-rose-500 flex items-center justify-center gap-2"><HeartPulse size={16}/> {s.baseline_hr}</td>
                         <td className="px-8 py-5 text-right space-x-3">
-                          <button onClick={() => { setEditingUser(s); setFormData(s); setShowModal(true); }} className="p-2 bg-amber-100 text-amber-600 rounded-lg hover:bg-amber-200 transition"><Edit2 size={16} /></button>
+                          <button onClick={() => openEditModal(s)} className="p-2 bg-amber-100 text-amber-600 rounded-lg hover:bg-amber-200 transition"><Edit2 size={16} /></button>
                           <button onClick={() => handleDeleteUser(s.user_id)} className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200 transition"><Trash2 size={16} /></button>
                         </td>
                       </tr>
@@ -323,24 +338,34 @@ const AdminPage = ({ user, onLogout }) => {
           <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-8 max-w-md w-full border border-slate-200 dark:border-slate-700">
             <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">{editingUser ? 'Редактировать' : 'Новый сотрудник'}</h2>
             <div className="space-y-4">
-              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Email</label><input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Email</label>
+              <input type="email" autoComplete="new-password" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Имя</label><input type="text" value={formData.first_name} onChange={e => setFormData({...formData, first_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фамилия</label><input type="text" value={formData.last_name} onChange={e => setFormData({...formData, last_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Имя</label>
+                <input type="text" autoComplete="new-password" value={formData.first_name} onChange={e => setFormData({...formData, first_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фамилия</label>
+                <input type="text" autoComplete="new-password" value={formData.last_name} onChange={e => setFormData({...formData, last_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
               </div>
-              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Отчество</label><input type="text" value={formData.patronymic} onChange={e => setFormData({...formData, patronymic: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-              {!editingUser && <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Пароль</label><input type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>}
+              
+              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Отчество</label>
+              <input type="text" autoComplete="new-password" value={formData.patronymic} onChange={e => setFormData({...formData, patronymic: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              
+              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">{editingUser ? 'Новый пароль (оставьте пустым, если не меняете)' : 'Пароль'}</label>
+              <input type="password" autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Роль в системе</label>
-                  <select value={formData.role_id} onChange={e => setFormData({...formData, role_id: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700">
-                    <option value="1">Администратор</option>
-                    <option value="2">Летный экипаж</option>
-                    <option value="3">Диспетчер ЦУП</option>
-                    <option value="4">Медработник</option>
+                  <select value={formData.role_name} onChange={e => setFormData({...formData, role_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700">
+                    <option value="administrator">Администратор</option>
+                    <option value="crew_member">Летный экипаж</option>
+                    <option value="dispatcher">Диспетчер ЦУП</option>
+                    <option value="medical_worker">Медработник</option>
                   </select>
                 </div>
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Базис ЧСС</label><input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Базис ЧСС</label>
+                <input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
               </div>
             </div>
             <div className="flex gap-4 mt-8">
