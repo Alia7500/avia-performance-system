@@ -59,13 +59,10 @@ const AdminPage = ({ user, onLogout }) => {
   const loadReports = async () => {
     setLoading(true);
     try {
-      const params = {};
-      if (dateRange.start) params.start_date = dateRange.start;
-      if (dateRange.end) params.end_date = dateRange.end;
-      const res = await api.get('/admin/extended-reports', { params });
-      setReports(res.data);
+      const res = await api.get(`/admin/extended-reports?start_date=${dateRange.start}&end_date=${dateRange.end}`);
+      setReports(res.data); // Сохраняем весь объект
     } catch (error) {
-      console.error('Ошибка отчетов:', error);
+      alert("Ошибка отчета: " + error.message);
     } finally {
       setLoading(false);
     }
