@@ -15,9 +15,12 @@ const CrewPage = ({ user, onLogout }) => {
   const [uploading, setUploading] = useState(false);
 
   const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-    document.documentElement.classList.toggle('dark');
+    setIsDarkMode((prev) => !prev);
   };
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDarkMode);
+  }, [isDarkMode]);
 
   const fetchData = async () => {
     try {
