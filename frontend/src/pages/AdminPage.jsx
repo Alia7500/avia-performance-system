@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import api from '../api/config';
 import { 
   UserPlus, Users, Search, TrendingUp, Trash2, Edit2, Eye, EyeOff, BarChart3, 
-  LogOut, ServerCrash, Loader2, CalendarRange, HeartPulse, BrainCircuit, ShieldAlert
+  LogOut, ServerCrash, Loader2, CalendarRange, HeartPulse, BrainCircuit, ShieldAlert, CheckCircle
 } from 'lucide-react';
 
 // Заглушка для пустых данных
@@ -24,13 +24,20 @@ const AdminPage = ({ user, onLogout }) => {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [showPassword, setShowPassword] = useState(false);
+  
+  // КРАСИВЫЕ УВЕДОМЛЕНИЯ ВМЕСТО ALERT
+  const [toast, setToast] = useState(null);
 
-  // 1. ИСПОЛЬЗУЕМ role_name ВМЕСТО role_id
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
   const [formData, setFormData] = useState({
     email: '', first_name: '', last_name: '', patronymic: '',
-    password: '', role_name: 'crew_member', baseline_hr: 75
+    password: '', role_name: 'crew_member', baseline_hr: 75, is_extended: false
   });
 
   // Загрузка данных при переключении вкладок
@@ -49,7 +56,7 @@ const AdminPage = ({ user, onLogout }) => {
           setAuditLogs(res.data);
         }
       } catch (error) {
-        console.error('Ошибка загрузки:', error);
+        showToast("Ошибка связи с сервером", "error");
       } finally {
         setLoading(false);
       }
@@ -57,55 +64,56 @@ const AdminPage = ({ user, onLogout }) => {
     fetchData();
   }, [activeTab]);
 
-  // Отдельная загрузка отчетов по кнопке
   const loadReports = async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/admin/extended-reports?start_date=${dateRange.start}&end_date=${dateRange.end}`);
-      setReports(res.data); // Сохраняем весь объект
+      const params = {};
+      if (dateRange.start) params.start_date = dateRange.start;
+      if (dateRange.end) params.end_date = dateRange.end;
+      const res = await api.get('/admin/extended-reports', { params });
+      setReports(res.data);
+      showToast("Отчет успешно сформирован");
     } catch (error) {
-      alert("Ошибка отчета: " + error.message);
+      showToast(error.response?.data?.detail || "Ошибка при генерации отчета", "error");
     } finally {
       setLoading(false);
     }
   };
 
-  // Инициализация отчетов при первом заходе на вкладку
   useEffect(() => {
-    if (activeTab === 'reports' && !reports.summary) {
-      loadReports();
-    }
+    if (activeTab === 'reports' && !reports.summary) loadReports();
   }, [activeTab]);
 
-  // 2. ФУНКЦИЯ СОХРАНЕНИЯ
   const handleSaveUser = async () => {
     try {
       setLoading(true);
       if (editingUser) {
         await api.put(`/admin/update_user/${editingUser.user_id}`, formData);
+        showToast('Данные сотрудника обновлены');
       } else {
         await api.post('/admin/create_user', formData);
+        showToast('Сотрудник успешно добавлен');
       }
       setShowModal(false);
       setEditingUser(null);
-      alert('Успешно сохранено!');
       const res = await api.get('/admin/staff');
       setStaff(res.data);
     } catch (error) {
-      alert('Ошибка: ' + (error.response?.data?.detail || error.message));
+      showToast(error.response?.data?.detail || "Ошибка сохранения", "error");
     } finally {
       setLoading(false);
     }
   };
 
-  // 3. ФУНКЦИЯ ОТКРЫТИЯ МОДАЛКИ (чтобы пароль был пустым, а роль правильной)
   const openEditModal = (userToEdit) => {
     setEditingUser(userToEdit);
     setFormData({
       ...userToEdit,
-      password: '', // пароль не показываем в целях безопасности
-      role_name: userToEdit.role_name // передаем текстовое имя роли
+      password: '', 
+      role_name: userToEdit.role_name,
+      is_extended: userToEdit.position === 'Главный врач'
     });
+    setShowPassword(false);
     setShowModal(true);
   };
 
@@ -114,8 +122,9 @@ const AdminPage = ({ user, onLogout }) => {
       try {
         await api.delete(`/admin/delete_user/${userId}`);
         setStaff(staff.filter(s => s.user_id !== userId));
+        showToast('Сотрудник удален');
       } catch (error) {
-        alert('Ошибка: ' + (error.response?.data?.detail || error.message));
+        showToast(error.response?.data?.detail || "Ошибка удаления", "error");
       }
     }
   };
@@ -134,7 +143,15 @@ const AdminPage = ({ user, onLogout }) => {
     });
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans flex flex-col relative">
+      
+      {/* КРАСИВОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ (ТОСТ) */}
+      {toast && (
+        <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl font-bold text-white transition-all animate-in slide-in-from-top-10 fade-in duration-300 ${toast.type === 'error' ? 'bg-rose-600 shadow-rose-600/30' : 'bg-emerald-500 shadow-emerald-500/30'}`}>
+          {toast.type === 'error' ? <ShieldAlert size={24}/> : <CheckCircle size={24}/>}
+          <span className="max-w-lg truncate">{toast.message}</span>
+        </div>
+      )}
       
       {/* --- HEADER --- */}
       <header className="sticky top-0 z-20 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl border-b border-slate-200 dark:border-slate-800 p-6 px-10 flex justify-between items-center shadow-sm">
@@ -181,7 +198,7 @@ const AdminPage = ({ user, onLogout }) => {
                 <option value="dispatcher">Диспетчеры ЦУП</option>
                 <option value="medical_worker">Медработники</option>
               </select>
-              <button onClick={() => { setEditingUser(null); setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_name: 'crew_member', baseline_hr: 75 }); setShowModal(true); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg transition-all">
+              <button onClick={() => { setEditingUser(null); setFormData({ email: '', first_name: '', last_name: '', patronymic: '', password: '', role_name: 'crew_member', baseline_hr: 75, is_extended: false }); setShowModal(true); }} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg transition-all">
                 <UserPlus size={20}/> Добавить
               </button>
             </div>
@@ -197,7 +214,7 @@ const AdminPage = ({ user, onLogout }) => {
                       <tr key={i} className="hover:bg-blue-50 dark:hover:bg-slate-700/50 transition-colors">
                         <td className="px-8 py-5 font-bold text-slate-800 dark:text-slate-200">{s.last_name} {s.first_name}</td>
                         <td className="px-8 py-5 text-sm text-slate-500">{s.email}</td>
-                        <td className="px-8 py-5"><span className="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 rounded-lg text-[10px] font-black uppercase tracking-widest">{s.position || s.role_name}</span></td>
+                        <td className="px-8 py-5"><span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border ${s.role_name === 'administrator' ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600'}`}>{s.position || s.role_name}</span></td>
                         <td className="px-8 py-5 text-center font-mono font-bold text-rose-500 flex items-center justify-center gap-2"><HeartPulse size={16}/> {s.baseline_hr}</td>
                         <td className="px-8 py-5 text-right space-x-3">
                           <button onClick={() => openEditModal(s)} className="p-2 bg-amber-100 text-amber-600 rounded-lg hover:bg-amber-200 transition"><Edit2 size={16} /></button>

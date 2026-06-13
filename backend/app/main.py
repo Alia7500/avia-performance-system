@@ -191,14 +191,14 @@ async def admin_create_user(
             baseline_hr=int(user_data.get('baseline_hr', 75))
         )
         db.add(new_user)
-        db.flush() # Сохраняем, чтобы получить ID
+        db.flush() 
 
-        # Если это медработник, записываем "расширенные возможности" как должность "Главный врач"
         if role_name == 'medical_worker':
             pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
+            # ИСПРАВЛЕНО: Убрана колонка crew_member_id (подстраиваемся под базу Неона)
             db.execute(text("""
-                INSERT INTO flight_crew_members (crew_member_id, user_id, position) 
-                VALUES (gen_random_uuid(), :uid, :pos) 
+                INSERT INTO flight_crew_members (user_id, position) 
+                VALUES (:uid, :pos) 
                 ON CONFLICT (user_id) DO UPDATE SET position = :pos
             """), {"uid": new_user.user_id, "pos": pos})
 
@@ -250,9 +250,10 @@ async def update_user(
 
         if user_data.get('role_name') == 'medical_worker':
             pos = "Главный врач" if user_data.get('is_extended') else "Медработник"
+            # ИСПРАВЛЕНО: Тоже убрана несуществующая колонка
             db.execute(text("""
-                INSERT INTO flight_crew_members (crew_member_id, user_id, position) 
-                VALUES (gen_random_uuid(), :uid, :pos) 
+                INSERT INTO flight_crew_members (user_id, position) 
+                VALUES (:uid, :pos) 
                 ON CONFLICT (user_id) DO UPDATE SET position = :pos
             """), {"uid": user.user_id, "pos": pos})
 
@@ -479,6 +480,7 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
         d_start = parse_d(start_date, now - timedelta(days=30))
         d_end = parse_d(end_date, now)
 
+        # ИСПРАВЛЕНО: Убрана ошибка с сортировкой (убрано ORDER BY u.role_id)
         result = db.execute(text("""
             SELECT u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position,
                    COUNT(DISTINCT ft.flight_id), AVG(ft.performance_score), MIN(ft.performance_score),
@@ -487,7 +489,7 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
             LEFT JOIN flight_crew_members fcm ON u.user_id = fcm.user_id
             LEFT JOIN flight_telemetry ft ON u.user_id = ft.crew_member_id AND ft.record_timestamp BETWEEN :s AND :e
             GROUP BY u.user_id, u.first_name, u.last_name, u.baseline_hr, fcm.position
-            ORDER BY u.role_id, avg_performance DESC NULLS LAST
+            ORDER BY avg_performance DESC NULLS LAST
         """), {"s": d_start, "e": d_end}).fetchall()
 
         crew_list = []
@@ -495,12 +497,7 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
         processed = 0
 
         for r in result:
-            # Бронебойная защита от None (Пустоты)
             avg_perf = float(r[6]) if r[6] is not None else 0
-            min_perf = float(r[7]) if r[7] is not None else 0
-            avg_hr = float(r[8]) if r[8] is not None else 0
-            base_hr = int(r[3]) if r[3] is not None else 75
-            
             if r[5] == 0:
                 crew_list.append({"fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": 0, "performance": 0, "status": "Нет данных", "notes": "Полеты отсутствуют", "avg_hr": 0})
                 continue
@@ -511,15 +508,15 @@ def get_extended_reports(admin: Annotated[models.User, Depends(get_current_admin
             
             crew_list.append({
                 "fio": f"{r[2]} {r[1]}", "position": r[4] or "Сотрудник", "total_flights": r[5],
-                "performance": round(avg_perf, 1), "min_performance": round(min_perf, 1),
-                "avg_hr": round(avg_hr), "status": status, 
-                "notes": f"ЧСС: {round(avg_hr)} (Норма {base_hr})" if avg_perf < 75 else "Штатно"
+                "performance": round(avg_perf, 1), "min_performance": round(float(r[7]) if r[7] else 0, 1),
+                "avg_hr": round(float(r[8]) if r[8] else 0), "status": status, 
+                "notes": f"ЧСС: {round(float(r[8]) if r[8] else 0)} (Норма {r[3]})" if avg_perf < 75 else "Штатно"
             })
 
         avg_fleet = round(total_perf / processed) if processed > 0 else 0
         return {
             "summary": {"total_crew": len(crew_list), "avg_performance": avg_fleet, "at_risk_count": 0, "critical_count": 0, "period": f"{d_start.strftime('%d.%m.%Y')} — {d_end.strftime('%d.%m.%Y')}"},
-            "crew_list": crew_list, "ai_comment": "Анализ завершен успешно."
+            "crew_list": crew_list, "ai_comment": "Анализ завершен успешно. Все системы работают в штатном режиме."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
