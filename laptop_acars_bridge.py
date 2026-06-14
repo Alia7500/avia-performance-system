@@ -1,56 +1,144 @@
-import asyncio
-import requests
-from bleak import BleakScanner, BleakClient
+import os
+import re
+import subprocess
+import sys
+import time
 
-# UUID из приложения Android Studio
-SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
-CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
-# Адрес твоего сервера!
+import requests
+
+# Буква r перед строкой обязательна для Windows-пути.
+ADB_PATH = r"C:\Users\Valentina\AppData\Local\Android\Sdk\platform-tools\adb.exe"
 API_URL = "https://api.avia-evm-web-app-ru.ru/crew/upload-telemetry-direct"
 
-async def run():
-    print("🔎 Ищем бортовое устройство (Galaxy Watch 4)...")
-    devices = await BleakScanner.discover(timeout=10.0)
-    target_device = None
-    
-    for d in devices:
-        # Проверяем имя устройства или наличие нужного сервиса
-        if d.name and "SM-R860" in d.name:
-            target_device = d
-            break
+# Строка с часов приходит так: 75;98;20 = ЧСС;SpO2;стресс
+ACARS_RE = re.compile(r"(?P<hr>\d{2,3});(?P<spo2>\d{2,3});(?P<stress>\d{1,3})")
 
-    if not target_device:
-        print("❌ Часы не найдены. Убедитесь, что приложение на часах АКТИВНО.")
+# ДОБАВЛЕНО: сколько раз повторять POST при ошибке сети
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # секунды между попытками
+
+
+def run(cmd, **kwargs):
+    return subprocess.run(cmd, text=True, capture_output=True, **kwargs)
+
+
+def check_adb():
+    if not os.path.exists(ADB_PATH):
+        print(f"❌ ADB не найден: {ADB_PATH}")
+        return False
+
+    res = run([ADB_PATH, "devices"])
+    print(res.stdout.strip())
+    connected = [line for line in res.stdout.splitlines() if "\tdevice" in line]
+    if not connected:
+        print("❌ Часы не видны как ADB device. Проверь Wi‑Fi debugging / pairing / кабель.")
+        return False
+    return True
+
+
+def send_to_server(payload: dict) -> bool:
+    """
+    ИСПРАВЛЕНО: добавлены retry-попытки при сетевых ошибках.
+    Возвращает True, если данные успешно переданы хотя бы с одной попытки.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            res = requests.post(API_URL, json=payload, timeout=5)
+            if res.ok:
+                print(
+                    f"📡 [ACARS TX] -> ЧСС: {payload['heart_rate']} | "
+                    f"SpO2: {payload['spo2']}% | stress: {payload['stress']} | ЦУП: OK"
+                )
+                return True
+
+            print(f"⚠️  Сервер ответил {res.status_code}: {res.text[:300]}")
+            # При 4xx (ошибка запроса) повтор не поможет — выходим сразу
+            if 400 <= res.status_code < 500:
+                return False
+
+        except requests.ConnectionError as e:
+            print(f"⚠️  Попытка {attempt}/{MAX_RETRIES}: нет соединения — {e}")
+        except requests.Timeout:
+            print(f"⚠️  Попытка {attempt}/{MAX_RETRIES}: таймаут")
+        except requests.RequestException as e:
+            print(f"❌ Не удалось отправить на сервер: {e}")
+            return False
+
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_DELAY)
+
+    print("❌ Все попытки исчерпаны, пакет потерян")
+    return False
+
+
+def run_adb_bridge():
+    print("🚀 Запуск системы имитации ACARS через ADB-шлюз...")
+    if not check_adb():
         return
 
-    print(f"✅ Найдено: {target_device.name} [{target_device.address}]")
-    print("🔄 Установка связи ACARS...")
+    print(f"📡 Канал связи установлен. Использую: {ADB_PATH}")
+    print("🧹 Очистка старых данных...")
+    run([ADB_PATH, "logcat", "-c"])
 
-    async with BleakClient(target_device) as client:
-        print("🟢 Подключено! Канал ACARS активен.")
+    # Показываем только наши теги.
+    # MC21_DEBUG — видно старт сервиса и ход запроса разрешений.
+    adb_command = [
+        ADB_PATH,
+        "logcat",
+        "-v", "brief",
+        "MC21_ACARS:D",
+        "MC21_DEBUG:D",
+        "MC21_ERROR:E",
+        "*:S",
+    ]
 
-        def handle_telemetry(sender, data):
-            try:
-                # Декодируем строку "HR;SpO2;Stress"
-                decoded = data.decode('utf-8').split(';')
-                payload = {
-                    "heart_rate": int(decoded[0]),
-                    "spo2": int(decoded[1]),
-                    "stress": int(decoded[2])
-                }
-                # Отправляем на сервер ЦУП
-                res = requests.post(API_URL, json=payload, timeout=3)
-                if res.status_code == 200:
-                    print(f"📡 [ACARS TX] -> ЧСС: {payload['heart_rate']} | SpO2: {payload['spo2']}% | ЦУП: Доставлено")
-            except Exception as e:
-                print(f"⚠️ Ошибка пакета: {e}")
+    print("🟢 ПРИЕМ ДАННЫХ АКТИВИРОВАН. Ожидаю сигнал с борта...")
+    process = None
 
-        # Подписываемся на обновления пульса
-        await client.start_notify(CHAR_UUID, handle_telemetry)
-        
-        print("⏳ Ожидание телеметрии... (Нажмите Ctrl+C для остановки)")
-        while True:
-            await asyncio.sleep(1)
+    try:
+        process = subprocess.Popen(
+            adb_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            # Выводим отладочные строки сервиса
+            if "MC21_DEBUG" in line or "MC21_ERROR" in line:
+                print(f"⌚ {line}")
+
+            match = ACARS_RE.search(line)
+            if not match:
+                continue
+
+            payload = {
+                "heart_rate": int(match.group("hr")),
+                "spo2": int(match.group("spo2")),
+                "stress": int(match.group("stress")),
+            }
+            send_to_server(payload)
+
+    except KeyboardInterrupt:
+        print("\n🛑 Остановлено пользователем")
+    except Exception as e:
+        print(f"❌ Ошибка ADB-шлюза: {e}")
+    finally:
+        if process:
+            process.terminate()
+            process.wait()  # ИСПРАВЛЕНО: ждём завершения, чтобы не оставлять зомби-процесс
+
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    try:
+        run_adb_bridge()
+    except Exception as exc:
+        print(f"❌ Фатальная ошибка: {exc}")
+        sys.exit(1)

@@ -973,7 +973,7 @@ async def upload_direct_telemetry(data: dict, db: Session = Depends(database.get
         # Ищем рейс, который летит прямо сейчас с Валентиной
         flight_id = db.execute(text("""
             SELECT f.flight_id FROM flights f
-            JOIN flight_assignments fa ON f.flight_id = f.flight_id
+            JOIN flight_assignments fa ON fa.flight_id = f.flight_id
             WHERE fa.crew_member_id = :uid AND f.status = 'В полёте'
             LIMIT 1
         """), {"uid": valya_id}).scalar()
