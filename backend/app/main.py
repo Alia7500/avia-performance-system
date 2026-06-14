@@ -23,6 +23,8 @@ from fastapi import Query
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+VALYA_EMAIL = "valentina.zherdeva01@gmail.com" 
+
 # Создание таблиц
 models.Base.metadata.create_all(bind=database.engine)
 
@@ -154,35 +156,31 @@ def sync_flightradar():
         db.close()
 
 def simulate_flight_telemetry():
-    """Генерация полной биометрии: Пульс, SpO2, Давление, Температура, Стресс"""
+    """Генерация биометрии (кроме Валентины)"""
     db = next(database.get_db())
     now = datetime.now(timezone.utc)
     try:
         active_flights = db.execute(text("SELECT flight_id FROM flights WHERE status = 'В полёте'")).fetchall()
         for f in active_flights:
             crew = db.execute(text("""
-                SELECT u.user_id, u.baseline_hr FROM users u 
+                SELECT u.user_id, u.baseline_hr, u.email FROM users u 
                 JOIN flight_assignments fa ON u.user_id = fa.crew_member_id 
                 WHERE fa.flight_id = :f_id
             """), {"f_id": f[0]}).fetchall()
 
             for member in crew:
-                hr = member.baseline_hr + random.randint(-5, 15)
+                # МАГИЯ ЗДЕСЬ: Если это Валентина, пропускаем симуляцию!
+                if member.email == VALYA_EMAIL:
+                    continue 
+
+                hr = (member.baseline_hr or 75) + random.randint(-5, 15)
                 stress = random.randint(10, 40)
-                
-                # Добавляем реалистичные мед. показатели
-                spo2 = random.randint(95, 99)
-                sys_bp = random.randint(110, 130)
-                dia_bp = random.randint(70, 85)
-                temp = round(random.uniform(36.4, 37.0), 1)
-                bp = f"{sys_bp}/{dia_bp}"
-                
-                perf = max(0, 100 - (abs(hr - member.baseline_hr) * 1.5) - (stress / 4))
+                perf = max(0, 100 - (abs(hr - (member.baseline_hr or 75)) * 1.5) - (stress / 4))
                 
                 db.execute(text("""
-                    INSERT INTO flight_telemetry (flight_id, crew_member_id, heart_rate, spo2, blood_pressure, temperature, stress_level, performance_score, record_timestamp)
-                    VALUES (:f, :u, :hr, :spo2, :bp, :temp, :s, :p, :ts)
-                """), {"f": f[0], "u": member.user_id, "hr": hr, "spo2": spo2, "bp": bp, "temp": temp, "s": stress, "p": perf, "ts": now})
+                    INSERT INTO flight_telemetry (telemetry_id, flight_id, crew_member_id, heart_rate, spo2, blood_pressure, temperature, stress_level, performance_score, record_timestamp)
+                    VALUES (gen_random_uuid(), :f, :u, :hr, 98, '120/80', 36.6, :s, :p, :ts)
+                """), {"f": f[0], "u": member.user_id, "hr": hr, "s": stress, "p": perf, "ts": now})
         db.commit()
     except Exception as e: pass
     finally: db.close()
@@ -963,3 +961,37 @@ def save_medical_check(medic: Annotated[models.User, Depends(get_current_user)],
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/crew/upload-telemetry-direct", tags=["Система"])
+async def upload_direct_telemetry(data: dict, db: Session = Depends(database.get_db)):
+    """Прием данных по каналу ACARS (от ноутбука)"""
+    try:
+        # Находим Валентину
+        valya_id = db.execute(text("SELECT user_id FROM users WHERE email = :e"), {"e": VALYA_EMAIL}).scalar()
+        if not valya_id: return {"status": "error", "message": "Пользователь не найден"}
+
+        # Ищем рейс, который летит прямо сейчас с Валентиной
+        flight_id = db.execute(text("""
+            SELECT f.flight_id FROM flights f
+            JOIN flight_assignments fa ON f.flight_id = f.flight_id
+            WHERE fa.crew_member_id = :uid AND f.status = 'В полёте'
+            LIMIT 1
+        """), {"uid": valya_id}).scalar()
+
+        if flight_id:
+            # Считаем индекс ИИ по реальным данным
+            perf = max(0, 100 - (abs(data['heart_rate'] - 75) * 1.5) - (data['stress'] / 4))
+            db.execute(text("""
+                INSERT INTO flight_telemetry (telemetry_id, flight_id, crew_member_id, heart_rate, spo2, stress_level, record_timestamp, performance_score, blood_pressure, temperature)
+                VALUES (gen_random_uuid(), :fid, :uid, :hr, :spo2, :str, :ts, :p, '120/80', 36.6)
+            """), {
+                "fid": flight_id, "uid": valya_id, 
+                "hr": data['heart_rate'], "spo2": data['spo2'], 
+                "str": data['stress'], "p": perf, "ts": datetime.now(timezone.utc)
+            })
+            db.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        db.rollback() 
+        return {"status": "error", "detail": str(e)}
+    

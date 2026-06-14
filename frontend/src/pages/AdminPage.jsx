@@ -384,76 +384,169 @@ const AdminPage = ({ user, onLogout }) => {
 
       {/* --- МОДАЛКА --- */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-8 max-w-md w-full border border-slate-200 dark:border-slate-700">
-            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight flex items-center gap-3">
-              {editingUser ? <Edit2 className="text-blue-500"/> : <UserPlus className="text-blue-500"/>}
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl p-10 max-w-lg w-full border border-slate-200 dark:border-slate-700">
+          
+          {/* Заголовок */}
+          <div className="flex items-center gap-3 mb-8">
+            <div className="p-2.5 bg-blue-50 dark:bg-blue-900/30 rounded-xl text-blue-600">
+              {editingUser ? <Edit2 size={24} /> : <UserPlus size={24} />}
+            </div>
+            <h2 className="text-2xl font-black uppercase tracking-tight">
               {editingUser ? 'Редактировать' : 'Новый сотрудник'}
             </h2>
-            
-            <div className="space-y-4">
-              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Email</label>
-              <input type="email" autoComplete="new-password" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Имя</label>
-                <input type="text" autoComplete="new-password" value={formData.first_name} onChange={e => setFormData({...formData, first_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фамилия</label>
-                <input type="text" autoComplete="new-password" value={formData.last_name} onChange={e => setFormData({...formData, last_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-              </div>
-              
-              <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Отчество</label>
-              <input type="text" autoComplete="new-password" value={formData.patronymic} onChange={e => setFormData({...formData, patronymic: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
-              
+          </div>
+          
+          <div className="space-y-5">
+            {/* Почта */}
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Email (Логин)</label>
+              <input 
+                type="email" 
+                autoComplete="off"
+                value={formData.email} 
+                onChange={e => setFormData({...formData, email: e.target.value})} 
+                className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-100 dark:border-slate-700 transition-all"
+              />
+            </div>
+          
+            {/* ФИО в две колонки */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">{editingUser ? 'Новый пароль (оставьте пустым)' : 'Пароль'}</label>
-                <div className="relative">
-                  <input type={showPassword ? "text" : "password"} autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700 pr-10"/>
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-[calc(50%+2px)] -translate-y-1/2 text-slate-400 hover:text-blue-500 transition-colors">
-                    {showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}
-                  </button>
-                </div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Имя</label>
+                <input 
+                  type="text" 
+                  value={formData.first_name} 
+                  onChange={e => setFormData({...formData, first_name: e.target.value})} 
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                />
               </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Роль в системе</label>
-                  <select value={formData.role_name} onChange={e => setFormData({...formData, role_name: e.target.value})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700">
-                    <option value="administrator">Администратор</option>
-                    <option value="crew_member">Летный экипаж</option>
-                    <option value="dispatcher">Диспетчер ЦУП</option>
-                    <option value="medical_worker">Медработник</option>
-                  </select>
-                </div>
-                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Базис ЧСС</label>
-                <input type="number" value={formData.baseline_hr} onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} className="w-full p-3 mt-1 bg-slate-50 dark:bg-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 border border-slate-200 dark:border-slate-700"/></div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Фамилия</label>
+                <input 
+                  type="text" 
+                  value={formData.last_name} 
+                  onChange={e => setFormData({...formData, last_name: e.target.value})} 
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                />
               </div>
             </div>
-            
+          
+            {/* Отчество */}
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Отчество</label>
+              <input 
+                type="text" 
+                value={formData.patronymic} 
+                onChange={e => setFormData({...formData, patronymic: e.target.value})} 
+                className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+          
+            {/* Пароль с иконкой */}
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">
+                {editingUser ? 'Новый пароль (оставьте пустым)' : 'Пароль'}
+              </label>
+              <div className="relative">
+                <input 
+                  type={showPassword ? "text" : "password"} 
+                  autoComplete="new-password"
+                  value={formData.password} 
+                  onChange={e => setFormData({...formData, password: e.target.value})} 
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 outline-none pr-12"
+                />
+                <button 
+                  type="button" 
+                  onClick={() => setShowPassword(!showPassword)} 
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-500 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={20}/> : <Eye size={20}/>}
+                </button>
+              </div>
+            </div>
+          
+            {/* Умная строка: Роль + (Должность ИЛИ Базис) */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Роль в системе</label>
+                <select 
+                  value={formData.role_name} 
+                  onChange={e => setFormData({...formData, role_name: e.target.value})} 
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl outline-none border border-slate-100 dark:border-slate-700 font-bold text-sm"
+                >
+                  <option value="crew_member">Летный экипаж</option>
+                  <option value="dispatcher">Диспетчер ЦУП</option>
+                  <option value="administrator">Администратор</option>
+                  <option value="medical_worker">Медработник</option>
+                </select>
+              </div>
+          
+              <div>
+                {formData.role_name === 'crew_member' ? (
+                  <div className="animate-in fade-in slide-in-from-right-2 duration-300">
+                    <label className="text-[10px] font-black text-blue-500 uppercase ml-1 block mb-1">Должность в небе</label>
+                    <select 
+                      value={formData.position || 'Бортпроводник'} 
+                      onChange={e => setFormData({...formData, position: e.target.value})} 
+                      className="w-full p-3.5 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-2xl outline-none font-bold text-blue-700 dark:text-blue-400 text-sm"
+                    >
+                      <option value="КВС">Командир (КВС)</option>
+                      <option value="Второй пилот">Второй пилот</option>
+                      <option value="Старший бортпроводник">Старший Б/П</option>
+                      <option value="Бортпроводник">Бортпроводник</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="animate-in fade-in duration-300">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1 block mb-1">Базис ЧСС</label>
+                    <input 
+                      type="number" 
+                      value={formData.baseline_hr} 
+                      onChange={e => setFormData({...formData, baseline_hr: parseInt(e.target.value)})} 
+                      className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+              
+            {/* Доп. опция для медика */}
             {formData.role_name === 'medical_worker' && (
-              <div className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800 mt-4">
+              <div className="flex items-center gap-3 bg-purple-50 dark:bg-purple-900/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-800 animate-in zoom-in-95">
                 <input 
                   type="checkbox" 
-                  id="ext" 
+                  id="ext_caps" 
                   checked={formData.is_extended || false} 
                   onChange={e => setFormData({...formData, is_extended: e.target.checked})} 
-                  className="w-5 h-5 rounded text-purple-600 focus:ring-purple-500 cursor-pointer" 
+                  className="w-5 h-5 rounded-md text-purple-600 focus:ring-purple-500 cursor-pointer" 
                 />
-                <label htmlFor="ext" className="text-sm font-bold text-purple-800 dark:text-purple-300 cursor-pointer select-none">
-                  Расширенные возможности (Должность: Главный врач)
+                <label htmlFor="ext_caps" className="text-xs font-bold text-purple-800 dark:text-purple-300 cursor-pointer select-none">
+                  Расширенные возможности (Главный врач)
                 </label>
               </div>
             )}
-            
-            <div className="flex gap-4 mt-8">
-              <button onClick={() => { setShowModal(false); setShowPassword(false); }} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition">Отмена</button>
-              <button onClick={handleSaveUser} disabled={loading} className="flex-1 py-4 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
-                {loading ? <><Loader2 className="animate-spin" size={20} /> Сохранение...</> : 'Сохранить'}
-              </button>
-            </div>
+          </div>
+          
+          {/* Кнопки */}
+          <div className="flex gap-4 mt-10">
+            <button 
+              onClick={() => setShowModal(false)} 
+              className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-bold rounded-2xl hover:bg-slate-200 transition-all"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={handleSaveUser}
+              disabled={loading}
+              className="flex-1 py-4 bg-blue-600 text-white font-black rounded-2xl shadow-xl shadow-blue-500/30 hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              {loading ? <Loader2 className="animate-spin" size={20} /> : 'Сохранить'}
+            </button>
           </div>
         </div>
-      )}
+      </div>
+    )}
     </div>
   );
 };

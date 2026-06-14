@@ -2,43 +2,55 @@ import asyncio
 import requests
 from bleak import BleakScanner, BleakClient
 
-# UUID из кода часов
+# UUID из приложения Android Studio
+SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
-API_URL = "https://api.avia-evm-web-app-ru.ru/crew/upload-telemetry-direct" # Создадим этот эндпоинт
+# Адрес твоего сервера!
+API_URL = "https://api.avia-evm-web-app-ru.ru/crew/upload-telemetry-direct"
 
-async def run_bridge():
-    print("🔎 Поиск часов МС-21...")
-    devices = await BleakScanner.discover()
-    target = None
+async def run():
+    print("🔎 Ищем бортовое устройство (Galaxy Watch 4)...")
+    devices = await BleakScanner.discover(timeout=10.0)
+    target_device = None
+    
     for d in devices:
-        if d.name and "SM-R860" in d.name: # Твои Galaxy Watch 4
-            target = d
+        # Проверяем имя устройства или наличие нужного сервиса
+        if d.name and "SM-R860" in d.name:
+            target_device = d
             break
 
-    if not target:
-        print("❌ Часы не найдены")
+    if not target_device:
+        print("❌ Часы не найдены. Убедитесь, что приложение на часах АКТИВНО.")
         return
 
-    async with BleakClient(target) as client:
-        print(f"✅ Подключено к бортовому устройству {target.name}")
+    print(f"✅ Найдено: {target_device.name} [{target_device.address}]")
+    print("🔄 Установка связи ACARS...")
 
-        def notification_handler(sender, data):
-            # Распаковываем данные (HR;SpO2;STRESS)
-            decoded = data.decode('utf-8').split(';')
-            payload = {
-                "heart_rate": int(decoded[0]),
-                "spo2": int(decoded[1]),
-                "stress": int(decoded[2])
-            }
-            # Отправляем на сервер по "ACARS" (HTTP POST)
+    async with BleakClient(target_device) as client:
+        print("🟢 Подключено! Канал ACARS активен.")
+
+        def handle_telemetry(sender, data):
             try:
-                requests.post(API_URL, json=payload, timeout=2)
-                print(f"📡 ACARS: Передано -> HR: {payload['heart_rate']} SpO2: {payload['spo2']}")
-            except:
-                print("⚠️ Ошибка связи с ЦУП")
+                # Декодируем строку "HR;SpO2;Stress"
+                decoded = data.decode('utf-8').split(';')
+                payload = {
+                    "heart_rate": int(decoded[0]),
+                    "spo2": int(decoded[1]),
+                    "stress": int(decoded[2])
+                }
+                # Отправляем на сервер ЦУП
+                res = requests.post(API_URL, json=payload, timeout=3)
+                if res.status_code == 200:
+                    print(f"📡 [ACARS TX] -> ЧСС: {payload['heart_rate']} | SpO2: {payload['spo2']}% | ЦУП: Доставлено")
+            except Exception as e:
+                print(f"⚠️ Ошибка пакета: {e}")
 
-        await client.start_notify(CHAR_UUID, notification_handler)
+        # Подписываемся на обновления пульса
+        await client.start_notify(CHAR_UUID, handle_telemetry)
+        
+        print("⏳ Ожидание телеметрии... (Нажмите Ctrl+C для остановки)")
         while True:
             await asyncio.sleep(1)
 
-asyncio.run(run_bridge())
+if __name__ == "__main__":
+    asyncio.run(run())
