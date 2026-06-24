@@ -7,7 +7,6 @@ const Staff = () => {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    // Нам нужно будет добавить этот эндпоинт в бэкенд, пока просто заготовка
     api.get('/admin/staff').then(res => setStaff(res.data)).catch(e => console.log("Нужен эндпоинт /admin/staff"));
   }, []);
 

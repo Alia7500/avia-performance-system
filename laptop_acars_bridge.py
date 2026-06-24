@@ -13,7 +13,6 @@ API_URL = "https://api.avia-evm-web-app-ru.ru/crew/upload-telemetry-direct"
 # Строка с часов приходит так: 75;98;20 = ЧСС;SpO2;стресс
 ACARS_RE = re.compile(r"(?P<hr>\d{2,3});(?P<spo2>\d{2,3});(?P<stress>\d{1,3})")
 
-# ДОБАВЛЕНО: сколько раз повторять POST при ошибке сети
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # секунды между попытками
 
@@ -37,10 +36,7 @@ def check_adb():
 
 
 def send_to_server(payload: dict) -> bool:
-    """
-    ИСПРАВЛЕНО: добавлены retry-попытки при сетевых ошибках.
-    Возвращает True, если данные успешно переданы хотя бы с одной попытки.
-    """
+    
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             res = requests.post(API_URL, json=payload, timeout=5)
@@ -133,7 +129,7 @@ def run_adb_bridge():
     finally:
         if process:
             process.terminate()
-            process.wait()  # ИСПРАВЛЕНО: ждём завершения, чтобы не оставлять зомби-процесс
+            process.wait() 
 
 
 if __name__ == "__main__":

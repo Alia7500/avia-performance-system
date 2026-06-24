@@ -207,6 +207,7 @@ def read_root():
 def login(form_data: dict, db: Session = Depends(database.get_db)):
     user = db.query(models.User).filter(models.User.email == form_data.get('username')).first()
     if not user or not security.verify_password(str(form_data.get('password')), user.password_hash):
+        log_action(db, user.user_id if user else None, "auth_failed", f"Неудачная попытка входа: {form_data.get('username')}", "warning")
         raise HTTPException(status_code=400, detail="Неверный логин или пароль")
     
     role_res = db.execute(text("SELECT role_name FROM roles WHERE role_id = :rid"), {"rid": user.role_id}).fetchone()
@@ -215,7 +216,40 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
     pos_res = db.execute(text("SELECT position FROM flight_crew_members WHERE user_id = :uid"), {"uid": user.user_id}).fetchone()
     position = pos_res[0] if pos_res else ("Диспетчер ЦУП" if role_name == 'dispatcher' else "Администратор")
 
+    # ==========================================
+    # АЛГОРИТМ А1: ПРОВЕРКА ДОВЕРЕННОГО УСТРОЙСТВА
+    # Ограничиваем всех, кроме Диспетчера и Летного экипажа
+    # ==========================================
+    if role_name in ['administrator', 'medical_worker']:
+        device_hash = form_data.get('device_hash')
+        if not device_hash:
+            log_action(db, user.user_id, "auth_blocked", "Попытка входа без аппаратного отпечатка", "warning")
+            raise HTTPException(status_code=403, detail="Доступ разрешен только с доверенного устройства")
+
+        # Проверяем, сколько вообще устройств у этого админа/медика
+        existing_devices = db.execute(text("SELECT count(*) FROM trusted_devices WHERE user_id = :uid"), {"uid": user.user_id}).scalar()
+
+        # Магия для защиты (чтобы ты не заблокировала себя):
+        # Первое устройство с которого ты войдешь - автоматически станет доверенным
+        if existing_devices == 0:
+            db.execute(text("""
+                INSERT INTO trusted_devices (device_id, user_id, device_hash, is_active) 
+                VALUES (gen_random_uuid(), :uid, :hash, true)
+            """), {"uid": user.user_id, "hash": device_hash})
+            db.commit()
+            log_action(db, user.user_id, "device_registered", f"Авто-регистрация доверенного терминала: {device_hash}")
+        else:
+            # Ищем это конкретное устройство в белом списке
+            device = db.execute(text("SELECT is_active FROM trusted_devices WHERE user_id = :uid AND device_hash = :hash"),
+                                {"uid": user.user_id, "hash": device_hash}).fetchone()
+            
+            if not device or not device[0]:
+                log_action(db, user.user_id, "auth_blocked", f"Попытка входа с неизвестного оборудования: {device_hash}", "error")
+                raise HTTPException(status_code=403, detail="Доступ с данного устройства запрещен политикой безопасности")
+
     token = security.create_access_token(data={"sub": str(user.user_id)})
+    log_action(db, user.user_id, "auth_success", f"Успешный вход ({role_name})")
+    
     return {
         "access_token": token, 
         "token_type": "bearer", 

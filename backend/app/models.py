@@ -114,3 +114,12 @@ class AuditLog(Base):
     description = Column(String)
     timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)
     result = Column(String, default="success")  # success, error, warning
+
+# --- 11. ДОВЕРЕННЫЕ УСТРОЙСТВА () ---
+class TrustedDevice(Base):
+    __tablename__ = "trusted_devices"
+    device_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"))
+    device_hash = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    registered_at = Column(DateTime(timezone=True), default=datetime.utcnow)
