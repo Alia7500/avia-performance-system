@@ -218,28 +218,27 @@ def login(form_data: dict, db: Session = Depends(database.get_db)):
 
     # ==========================================
     # АЛГОРИТМ А1: ПРОВЕРКА ДОВЕРЕННОГО УСТРОЙСТВА
-    # Ограничиваем всех, кроме Диспетчера и Летного экипажа
+    # Ограничиваем: Админов, Медиков И ДИСПЕТЧЕРОВ!
     # ==========================================
-    if role_name in ['administrator', 'medical_worker']:
+    if role_name in ['administrator', 'medical_worker', 'dispatcher']:
         device_hash = form_data.get('device_hash')
         if not device_hash:
             log_action(db, user.user_id, "auth_blocked", "Попытка входа без аппаратного отпечатка", "warning")
             raise HTTPException(status_code=403, detail="Доступ разрешен только с доверенного устройства")
 
-        # Проверяем, сколько вообще устройств у этого админа/медика
+        # Проверяем количество зарегистрированных устройств для ЭТОГО пользователя
         existing_devices = db.execute(text("SELECT count(*) FROM trusted_devices WHERE user_id = :uid"), {"uid": user.user_id}).scalar()
 
-        # Магия для защиты (чтобы ты не заблокировала себя):
-        # Первое устройство с которого ты войдешь - автоматически станет доверенным
+        # Первое устройство прикрепляется автоматически
         if existing_devices == 0:
             db.execute(text("""
                 INSERT INTO trusted_devices (device_id, user_id, device_hash, is_active) 
                 VALUES (gen_random_uuid(), :uid, :hash, true)
             """), {"uid": user.user_id, "hash": device_hash})
             db.commit()
-            log_action(db, user.user_id, "device_registered", f"Авто-регистрация доверенного терминала: {device_hash}")
+            log_action(db, user.user_id, "device_registered", f"Авто-регистрация терминала: {device_hash}")
         else:
-            # Ищем это конкретное устройство в белом списке
+            # Ищем, разрешено ли это конкретное устройство
             device = db.execute(text("SELECT is_active FROM trusted_devices WHERE user_id = :uid AND device_hash = :hash"),
                                 {"uid": user.user_id, "hash": device_hash}).fetchone()
             
